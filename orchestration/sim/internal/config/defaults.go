@@ -182,7 +182,7 @@ func defaultFCUController(cfg *FCUControllerConfig) {
 	cfg.TakeoffAltM = defaultFloat(cfg.TakeoffAltM, 0.5)
 	cfg.TakeoffMinHeightM = defaultFloat(cfg.TakeoffMinHeightM, 0.15)
 	cfg.TakeoffMinHeightRatio = defaultFloat(cfg.TakeoffMinHeightRatio, 0.35)
-	cfg.ReadinessTimeoutSec = defaultFloat(cfg.ReadinessTimeoutSec, 90)
+	cfg.ReadinessTimeoutSec = defaultFloat(cfg.ReadinessTimeoutSec, 45)
 	cfg.HoldAfterReadySec = defaultFloat(cfg.HoldAfterReadySec, 8)
 	if !cfg.RequireSlamBackend {
 		cfg.RequireSlamBackend = true
