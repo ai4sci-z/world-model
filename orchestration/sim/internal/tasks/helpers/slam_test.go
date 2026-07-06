@@ -21,7 +21,9 @@ func TestWriteSlamRuntimeConfig(t *testing.T) {
 		`backend = 'cartographer'`,
 		`scan_topic = '/scan'`,
 		`imu_source_topic = '/imu'`,
-		`imu_topic = '/imu'`,
+		// The sanitising bridge output must differ from its /imu source, else the
+		// bridge re-ingests its own output and cartographer aborts (Non-sorted data).
+		`imu_topic = '/navlab/slam/imu'`,
 		`laser_z = '0.075077'`,
 		`laser_frame_id = 'base_scan'`,
 		`launch_fake_odom = false`,
@@ -38,6 +40,9 @@ func TestWriteSlamRuntimeConfig(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("runtime config missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "imu_topic = '/imu'\n") {
+		t.Fatalf("imu_topic must not echo the bridge source /imu (self-ingest aborts cartographer):\n%s", text)
 	}
 	if strings.Contains(text, `cartographer_odometry_topic = '/odometry'`) {
 		t.Fatalf("runtime config must not point Cartographer odometry input at diagnostic truth /odometry:\n%s", text)

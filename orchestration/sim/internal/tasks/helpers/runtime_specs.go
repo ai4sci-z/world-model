@@ -436,6 +436,11 @@ type FrameContractSpec struct {
 	MaxRangefinderHeightErr float64
 	MaxDirectionErrorRad    float64
 	ProbeDurationSec        float64
+	// ProbeTimeoutSec is the per-topic sampling budget for the frame contract
+	// probe. Matching a late-joining subscription to the ArduPilot micro-ROS
+	// agent's publishers takes ~30s of DDS endpoint discovery (measured), so
+	// the default 8s template budget misses /ap/v1/pose/filtered every time.
+	ProbeTimeoutSec         float64
 }
 
 func DefaultFrameContractSpec() FrameContractSpec {
@@ -467,6 +472,7 @@ func DefaultFrameContractSpec() FrameContractSpec {
 		MaxRangefinderHeightErr: 0.25,
 		MaxDirectionErrorRad:    0.35,
 		ProbeDurationSec:        12.0,
+		ProbeTimeoutSec:         45.0,
 	}
 }
 

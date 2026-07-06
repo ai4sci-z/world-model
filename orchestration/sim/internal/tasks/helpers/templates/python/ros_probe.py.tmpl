@@ -166,8 +166,26 @@ def sample_message_topic(topic: str) -> dict:
         def on_msg(msg) -> None:
             holder["msg"] = msg
 
-        subscription = node.create_subscription(msg_type, topic, on_msg, qos_profile_sensor_data)
-        deadline = time.monotonic() + TOPIC_SAMPLE_TIMEOUT_SEC
+        sub_qos = qos_profile_sensor_data
+        try:
+            infos = node.get_publishers_info_by_topic(topic)
+        except Exception:
+            infos = []
+        if infos:
+            from rclpy.qos import QoSProfile, QoSHistoryPolicy
+            src_qos = infos[0].qos_profile
+            sub_qos = QoSProfile(
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=max(1, getattr(src_qos, "depth", 0) or 10),
+                reliability=src_qos.reliability,
+                durability=src_qos.durability,
+            )
+        subscription = node.create_subscription(msg_type, topic, on_msg, sub_qos)
+        # The topic type was discovered above, so a publisher exists. Allow the
+        # full probe budget here: matching a late-joining subscription to some
+        # publishers (e.g. the ArduPilot micro-ROS agent) takes ~30s of DDS
+        # endpoint discovery, while data flows immediately once matched.
+        deadline = time.monotonic() + PROBE_TIMEOUT_SEC
         spins = 0
         while rclpy.ok() and time.monotonic() < deadline and holder["msg"] is None:
             spins += 1

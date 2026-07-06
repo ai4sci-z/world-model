@@ -277,6 +277,12 @@ func probeTimeoutSec(name string, durationSec float64) float64 {
 	if name == "exploration_probe" {
 		return 90
 	}
+	if name == "frame_contract_probe" {
+		// The per-topic sampling budget is 45s (see FrameContractSpec) because
+		// late-joining DDS endpoint discovery against the ArduPilot micro-ROS
+		// agent takes ~30s; 30s of container budget kills the probe first.
+		return 90
+	}
 	if name == "slam_hover_probe" {
 		if durationSec+30 > 120 {
 			return durationSec + 30

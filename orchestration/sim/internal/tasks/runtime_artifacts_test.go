@@ -629,9 +629,11 @@ func assertParamOverlayContainsExternalNavAndRangefinder(t *testing.T, path stri
 		"RNGFND1_PIN -1",
 		"RNGFND1_SCALING 3",
 		"RNGFND1_TYPE 20",
-		"RNGFND1_MIN_CM 10",
-		"RNGFND1_MAX_CM 1200",
-		"RNGFND1_GNDCLEAR 15",
+		// ArduPilot 4.5 renamed RNGFND1_MIN_CM/MAX_CM/GNDCLEAR to MIN/MAX/GNDCLR
+		// (cm->m); the old names are silently ignored by current firmware.
+		"RNGFND1_MIN 0.05",
+		"RNGFND1_MAX 12",
+		"RNGFND1_GNDCLR 0.15",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("generated param overlay missing %q:\n%s", want, text)
@@ -640,9 +642,11 @@ func assertParamOverlayContainsExternalNavAndRangefinder(t *testing.T, path stri
 	for _, stale := range []string{
 		"RNGFND1_TYPE 1",
 		"RNGFND1_TYPE 10",
-		"RNGFND1_MIN_CM 5",
-		"RNGFND1_MAX_CM 600",
-		"RNGFND1_GNDCLEAR 10",
+		// pre-4.5 param names must never appear: current firmware ignores them
+		// silently, so MIN would fall back to 0.20m and reject the sim reading.
+		"RNGFND1_MIN_CM",
+		"RNGFND1_MAX_CM",
+		"RNGFND1_GNDCLEAR",
 		"RNGFND1_SCALING 10",
 		"RNGFND1_PIN 0",
 		"RNGFND1_MAX 50.00",
