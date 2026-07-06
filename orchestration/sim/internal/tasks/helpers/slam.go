@@ -86,7 +86,7 @@ func DefaultSlamRuntimeSpec() SlamRuntimeSpec {
 		CartographerConfigurationBasename:  "navlab_cartographer_2d_real.lua",
 		ScanTopic:                          "/scan",
 		IMUSourceTopic:                     "/imu",
-		IMUTopic:                           "/imu",
+		IMUTopic:                           "/navlab/slam/imu",
 		OdometryTopic:                      CartographerOdometryInputTopic,
 		CartographerTFTopic:                CartographerTFTopic,
 		PublishGlobalTF:                    true,

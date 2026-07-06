@@ -52,15 +52,16 @@ func writeBridgeOverride(path string, imuRosTopic string) error {
 }
 
 func WriteParamOverlayFromSource(path string, source string, spec SensorRuntimeSpec) error {
-	minCM := int(spec.RangefinderMinDistanceM*100 + 0.5)
-	maxCM := int(spec.RangefinderMaxDistanceM*100 + 0.5)
 	orientation := 25
 	overlay := missingParamLines(source, map[string]string{
 		"RNGFND1_TYPE":     "20",
 		"RNGFND1_ORIENT":   fmt.Sprintf("%d", orientation),
-		"RNGFND1_MIN_CM":   fmt.Sprintf("%d", minCM),
-		"RNGFND1_MAX_CM":   fmt.Sprintf("%d", maxCM),
-		"RNGFND1_GNDCLEAR": "15",
+		// ArduPilot 4.5 renamed RNGFND1_MIN_CM/MAX_CM/GNDCLEAR to MIN/MAX/GNDCLR
+		// (cm->m); the old names are silently ignored by current firmware, so MIN
+		// fell to its 0.20 m default and the 0.095 m sim reading was rejected.
+		"RNGFND1_MIN":    fmt.Sprintf("%.2f", spec.RangefinderMinDistanceM),
+		"RNGFND1_MAX":    fmt.Sprintf("%.2f", spec.RangefinderMaxDistanceM),
+		"RNGFND1_GNDCLR": "0.15",
 	})
 	if overlay == "" {
 		return writeText(path, strings.TrimRight(source, "\n")+"\n")
@@ -77,7 +78,7 @@ func missingParamLines(source string, defaults map[string]string) string {
 		}
 		seen[fields[0]] = true
 	}
-	keys := []string{"RNGFND1_TYPE", "RNGFND1_ORIENT", "RNGFND1_MIN_CM", "RNGFND1_MAX_CM", "RNGFND1_GNDCLEAR"}
+	keys := []string{"RNGFND1_TYPE", "RNGFND1_ORIENT", "RNGFND1_MIN", "RNGFND1_MAX", "RNGFND1_GNDCLR"}
 	lines := []string{}
 	for _, key := range keys {
 		if seen[key] {

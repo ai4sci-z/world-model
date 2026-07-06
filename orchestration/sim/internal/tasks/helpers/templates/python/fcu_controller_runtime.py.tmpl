@@ -362,8 +362,17 @@ def main() -> int:
         state["setpoint_intent"] = payload
         state["setpoint_intent_count"] += 1
         state["last_setpoint_intent_ms"] = int(time.time() * 1000)
-        publish_cmd_vel_from_intent(payload)
-        send_mavlink_local_position_setpoint(payload)
+        # Do not forward exploration intent to the FCU until takeoff has
+        # completed. Before takeoff the intent is a stationary "hold" that,
+        # forwarded as cmd_vel / local-position setpoint, overrides the GUIDED
+        # takeoff climb (CTUN.DAlt pinned to the current altitude) so the
+        # vehicle never leaves the ground; takeoff then never reports ok, the
+        # controller never becomes ready and the workflow keeps emitting hold
+        # intent -- a deadlock. Only forward once the FCU bootstrap (incl.
+        # takeoff) is ready.
+        if bootstrap_ready(state):
+            publish_cmd_vel_from_intent(payload)
+            send_mavlink_local_position_setpoint(payload)
 
     def publish_cmd_vel_from_intent(payload: dict) -> None:
         cmd = TwistStamped()

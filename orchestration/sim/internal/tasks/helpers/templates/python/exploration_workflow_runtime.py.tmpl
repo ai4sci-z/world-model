@@ -144,7 +144,7 @@ def exploration_intent(goal_index: int, speed: float, state: dict) -> dict:
         {"linear_x_mps": speed * 0.6, "linear_y_mps": 0.0, "yaw_rate_radps": 0.20},
         {"linear_x_mps": speed, "linear_y_mps": 0.0, "yaw_rate_radps": -0.12},
     ]
-    command = dict(pattern[goal_index %% len(pattern)])
+    command = dict(pattern[goal_index % len(pattern)])
     command.update({
         "ok": True,
         "source": "exploration_workflow",

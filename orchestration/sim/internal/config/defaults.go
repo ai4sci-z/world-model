@@ -126,7 +126,7 @@ func defaultSlamBackend(cfg *SlamBackendConfig) {
 	cfg.LaunchFile = defaultString(cfg.LaunchFile, "navlab_slam_bringup.launch.py")
 	cfg.CartographerConfigurationBasename = defaultString(cfg.CartographerConfigurationBasename, "navlab_cartographer_2d_real.lua")
 	cfg.ScanTopic = defaultString(cfg.ScanTopic, "/scan")
-	cfg.IMUTopic = defaultString(cfg.IMUTopic, "/imu")
+	cfg.IMUTopic = defaultString(cfg.IMUTopic, "/navlab/slam/imu")
 	cfg.OdometryTopic = defaultString(cfg.OdometryTopic, "/cartographer/odometry_input")
 	cfg.CartographerTFTopic = defaultString(cfg.CartographerTFTopic, "/navlab/slam/tf")
 	cfg.OdomSourceMode = defaultString(cfg.OdomSourceMode, "slam_tf")
@@ -182,7 +182,7 @@ func defaultFCUController(cfg *FCUControllerConfig) {
 	cfg.TakeoffAltM = defaultFloat(cfg.TakeoffAltM, 0.5)
 	cfg.TakeoffMinHeightM = defaultFloat(cfg.TakeoffMinHeightM, 0.15)
 	cfg.TakeoffMinHeightRatio = defaultFloat(cfg.TakeoffMinHeightRatio, 0.35)
-	cfg.ReadinessTimeoutSec = defaultFloat(cfg.ReadinessTimeoutSec, 45)
+	cfg.ReadinessTimeoutSec = defaultFloat(cfg.ReadinessTimeoutSec, 90)
 	cfg.HoldAfterReadySec = defaultFloat(cfg.HoldAfterReadySec, 8)
 	if !cfg.RequireSlamBackend {
 		cfg.RequireSlamBackend = true

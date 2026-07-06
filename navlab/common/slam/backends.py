@@ -62,7 +62,15 @@ class CartographerBackend(SlamBackend):
     BACKEND_NAME: ClassVar[str] = "cartographer"
 
     def command(self, config: RuntimeConfig) -> list[str]:
-        launch_args = [f"{key}:={launch_value(value)}" for key, value in config.launch_argument_map().items()]
+        launch_args = []
+        for key, value in config.launch_argument_map().items():
+            rendered = launch_value(value)
+            if rendered == "":
+                # ROS 2 launch rejects empty 'name:=' arguments (e.g. an unset
+                # cartographer_configuration_directory); omit them so the launch
+                # file's own default value is used instead. (jazzy rejects too)
+                continue
+            launch_args.append(f"{key}:={rendered}")
         return [
             "ros2",
             "launch",
