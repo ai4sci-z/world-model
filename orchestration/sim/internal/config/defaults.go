@@ -203,7 +203,14 @@ func defaultFrameContract(cfg *FrameContractConfig) {
 	cfg.IMUTopic = defaultString(cfg.IMUTopic, "/imu")
 	cfg.RangefinderRangeTopic = defaultString(cfg.RangefinderRangeTopic, "/rangefinder/down/range")
 	cfg.RangefinderStatusTopic = defaultString(cfg.RangefinderStatusTopic, "/rangefinder/down/status")
-	cfg.FCUPoseTopic = defaultString(cfg.FCUPoseTopic, "/ap/v1/pose/filtered")
+	// frame_contract samples FCU pose from the MAVLink-republished consumed route
+	// (/navlab/fcu/local_position_pose), NOT the micro-ROS DDS debug stream
+	// /ap/v1/pose/filtered whose endpoint discovery has an unbounded tail
+	// (measured 29s..97s+) and made frame_contract sampling flaky (stage6 fix 6).
+	// This is the real source: DefaultFrameContractSpec() hard-codes the same topic
+	// (helpers/runtime_specs.go), but frameSpec() overwrites it with this config
+	// default (runtime_artifacts.go: spec.FCUPoseTopic = frame.FCUPoseTopic).
+	cfg.FCUPoseTopic = defaultString(cfg.FCUPoseTopic, "/navlab/fcu/local_position_pose")
 	cfg.FCUTwistTopic = defaultString(cfg.FCUTwistTopic, "/ap/v1/twist/filtered")
 	cfg.FCUStatusTopic = defaultString(cfg.FCUStatusTopic, "/ap/v1/status")
 	cfg.CmdVelTopic = defaultString(cfg.CmdVelTopic, "/ap/v1/cmd_vel")
