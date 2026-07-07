@@ -1124,7 +1124,10 @@ func DefaultExplorationWorkflowSpec() ExplorationWorkflowSpec {
 		YawRateRadPS:           0.18,
 		MinAcceptedGoals:       3,
 		MinPathLengthM:         0.35,
-		ProbeTimeoutSec:        35.0,
+		ProbeTimeoutSec:        90.0, // was 35: probe launches with services and must still be
+		// observing when exploration completes (readiness ~45s + 26s window); 35s closed
+		// before slower-converging runs could report ok=true (same calibration family as
+		// the frame-contract 45s budget).
 		ControllerStatusTopic:  "/navlab/fcu/controller/status",
 		SetpointIntentTopic:    "/navlab/fcu/setpoint/intent",
 		SetpointOutputTopic:    "/navlab/fcu/setpoint/output",

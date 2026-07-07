@@ -148,7 +148,11 @@ def sample_message_topic(topic: str) -> dict:
     try:
         rclpy.init(args=None)
         node = rclpy.create_node("navlab_probe_message_topic")
-        type_deadline = time.monotonic() + TOPIC_SAMPLE_TIMEOUT_SEC
+        # Type discovery for late-joining participants is subject to the same slow
+        # DDS propagation as endpoint matching (micro-ROS agent topics measured at
+        # ~29s), so it must use the full probe budget: a 2s gate here starved the
+        # 45s message-wait budget below and made /ap/v1/pose/filtered sampling flaky.
+        type_deadline = time.monotonic() + PROBE_TIMEOUT_SEC
         topic_type = ""
         while rclpy.ok() and time.monotonic() < type_deadline:
             for name, types in node.get_topic_names_and_types():

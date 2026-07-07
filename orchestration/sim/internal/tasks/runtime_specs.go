@@ -275,7 +275,10 @@ func probeTimeoutSec(name string, durationSec float64) float64 {
 		return 90
 	}
 	if name == "exploration_probe" {
-		return 90
+		// Container ceiling for the 90s in-script status budget plus interpreter
+		// startup; must strictly exceed the script budget or the container is
+		// killed as "context deadline exceeded" before the script can report.
+		return 150
 	}
 	if name == "frame_contract_probe" {
 		// The per-topic sampling budget is 45s (see FrameContractSpec) because
