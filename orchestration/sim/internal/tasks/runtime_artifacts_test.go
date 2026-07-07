@@ -624,7 +624,7 @@ func assertParamOverlayContainsExternalNavAndRangefinder(t *testing.T, path stri
 		"EK3_SRC1_POSZ 2",
 		"EK3_SRC1_VELXY 0",
 		"EK3_SRC1_VELZ 0",
-		"EK3_SRC1_YAW 1",
+		"EK3_SRC1_YAW 6",
 		"SERIAL7_PROTOCOL 9",
 		"RNGFND1_PIN -1",
 		"RNGFND1_SCALING 3",

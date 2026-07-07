@@ -141,7 +141,6 @@ func TestBuildRuntimeSpecsFromExecutionPlan(t *testing.T) {
 		"--odom-topic /external_nav/odom",
 		"--status-topic /mavlink_external_nav/status",
 		"--local-position-pose-topic /navlab/fcu/local_position_pose",
-		"--align-yaw-to-fcu",
 		"--max-local-position-age-ms 1000",
 		"--max-horizontal-speed-mps 0.25",
 		"--max-yaw-rate-radps 0.6",

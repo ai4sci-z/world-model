@@ -456,7 +456,7 @@ func mavlinkExternalNavSenderServiceSpec(
 		"--quality 100",
 		"--source-system 191",
 		"--use-fcu-roll-pitch",
-		"--align-yaw-to-fcu",
+		"--no-align-yaw-to-fcu",
 		"--local-position-pose-topic /navlab/fcu/local_position_pose",
 		"--max-local-position-age-ms 1000",
 		"--max-horizontal-speed-mps 0.25",

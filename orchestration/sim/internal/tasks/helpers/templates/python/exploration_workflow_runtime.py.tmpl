@@ -83,6 +83,18 @@ def main() -> int:
     deadline = start + duration_sec + 15.0
     completed_hold_sec = 5.0
 
+    if str(SPEC.get("strategy", "")) == "external":
+        # External exploration strategy: an out-of-process planner (e.g. a
+        # bridged GBPlanner) drives /navlab/fcu/setpoint/intent and owns
+        # /navlab/exploration/status. The built-in workflow stays fully
+        # passive for the whole window so the two never interleave.
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=0.02)
+            time.sleep(0.2)
+        node.destroy_node()
+        rclpy.shutdown()
+        return 0
+
     while rclpy.ok() and time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.02)
         ready_elapsed = 0.0
