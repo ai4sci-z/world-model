@@ -274,6 +274,11 @@ func probeTimeoutSec(name string, durationSec float64) float64 {
 		}
 		return 90
 	}
+	if name == "frame_contract_probe" {
+		// Ceiling for the 90s per-topic budget plus the string batch and the
+		// remaining message topics (only the micro-ROS topics are slow).
+		return 150
+	}
 	if name == "exploration_probe" {
 		// Container ceiling for the 90s in-script status budget plus interpreter
 		// startup; must strictly exceed the script budget or the container is

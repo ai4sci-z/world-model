@@ -171,10 +171,28 @@ def sample_message_topic(topic: str) -> dict:
             holder["msg"] = msg
 
         sub_qos = qos_profile_sensor_data
-        try:
-            infos = node.get_publishers_info_by_topic(topic)
-        except Exception:
-            infos = []
+        # Publisher-info discovery races the same DDS propagation as everything
+        # else: an empty result here made the subscription fall back to a
+        # volatile QoS and silently miss latched topics (/tf_static). Retry the
+        # query within a small budget, and if it stays empty for a latched-by-
+        # convention topic, default to TRANSIENT_LOCAL instead of guessing.
+        infos = []
+        info_deadline = time.monotonic() + min(10.0, PROBE_TIMEOUT_SEC / 3.0)
+        while time.monotonic() < info_deadline:
+            try:
+                infos = node.get_publishers_info_by_topic(topic)
+            except Exception:
+                infos = []
+            if infos:
+                break
+            rclpy.spin_once(node, timeout_sec=0.2)
+        if not infos and topic.endswith("tf_static"):
+            from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSDurabilityPolicy, QoSReliabilityPolicy
+            sub_qos = QoSProfile(
+                history=QoSHistoryPolicy.KEEP_LAST, depth=100,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            )
         if infos:
             from rclpy.qos import QoSProfile, QoSHistoryPolicy
             src_qos = infos[0].qos_profile

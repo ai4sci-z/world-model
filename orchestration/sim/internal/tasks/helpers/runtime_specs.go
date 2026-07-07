@@ -456,7 +456,12 @@ func DefaultFrameContractSpec() FrameContractSpec {
 		IMUTopic:                "/imu",
 		RangefinderRangeTopic:   "/rangefinder/down/range",
 		RangefinderStatusTopic:  "/rangefinder/down/status",
-		FCUPoseTopic:            "/ap/v1/pose/filtered",
+		FCUPoseTopic:            "/navlab/fcu/local_position_pose", // was /ap/v1/pose/filtered:
+		// the DDS debug stream has no consumer in the pipeline and its late-join
+		// endpoint matching to the micro-ROS agent has an unbounded tail (measured
+		// 29s..97s+). The contract being probed is 'FCU pose is available', and the
+		// pipeline actually consumes pose via the MAVLink-republished topic, so
+		// sample the consumed route.
 		FCUTwistTopic:           "/ap/v1/twist/filtered",
 		FCUStatusTopic:          "/ap/v1/status",
 		CmdVelTopic:             "/ap/v1/cmd_vel",
@@ -472,7 +477,9 @@ func DefaultFrameContractSpec() FrameContractSpec {
 		MaxRangefinderHeightErr: 0.25,
 		MaxDirectionErrorRad:    0.35,
 		ProbeDurationSec:        12.0,
-		ProbeTimeoutSec:         45.0,
+		ProbeTimeoutSec:         90.0, // was 45: micro-ROS agent endpoint matching for a
+		// late-joining subscription was measured at ~29s in isolation and at 48.96s
+		// under a fuller participant load, so 45s intermittently starved the wait.
 	}
 }
 
