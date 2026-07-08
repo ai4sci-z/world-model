@@ -82,11 +82,13 @@ func ExplorationTaskReviewTopics(spec ExplorationWorkflowSpec) []string {
 }
 
 func ExplorationTaskRequiredTopics(spec ExplorationWorkflowSpec) []string {
+	// FCU pose evidence must ride the consumed MAVLink route; the /ap/v1/*
+	// micro-ROS debug streams have flaky DDS discovery and stay review-only
+	// (same rationale as the frame_contract FCUPoseTopic default).
 	return appendUniqueTopics(nil,
 		"/tf",
 		"/tf_static",
-		"/ap/v1/pose/filtered",
-		"/ap/v1/twist/filtered",
+		"/navlab/fcu/local_position_pose",
 		"/rangefinder/down/range",
 		spec.ControllerStatusTopic,
 		spec.SetpointIntentTopic,
