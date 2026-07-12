@@ -39,6 +39,7 @@ def run(argv: list[str] | None = None) -> int:
         import rclpy
         from rclpy.executors import ExternalShutdownException
         from rclpy.node import Node
+        from rclpy.qos import qos_profile_sensor_data
         from sensor_msgs.msg import LaserScan, Range
         from std_msgs.msg import String
     except ModuleNotFoundError as exc:
@@ -51,7 +52,9 @@ def run(argv: list[str] | None = None) -> int:
             self._input_count = 0
             self._range_pub = self.create_publisher(Range, config.range_topic, 10)
             self._status_pub = self.create_publisher(String, config.status_topic, 10)
-            self.create_subscription(LaserScan, config.scan_ideal_topic, self._handle_scan, 10)
+            self.create_subscription(
+                LaserScan, config.scan_ideal_topic, self._handle_scan, qos_profile_sensor_data
+            )
             self.create_timer(0.5, self._publish_status)
             logger.info(
                 "down range projection started scan_topic={} range_topic={}",
