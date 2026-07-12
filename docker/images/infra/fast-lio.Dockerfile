@@ -32,9 +32,11 @@ RUN test -f /tmp/third_party/Livox-SDK2/CMakeLists.txt \
     || (echo "Livox-SDK2 source missing: add it at third_party/Livox-SDK2 before building this image" >&2; exit 2)
 
 WORKDIR /tmp/third_party/Livox-SDK2
+# Livox-SDK2 uses std::uint8_t without including <cstdint>; GCC 13 (jazzy) no longer
+# pulls it in transitively, so force-include it.
 RUN mkdir -p build \
     && cd build \
-    && cmake .. \
+    && cmake .. -DCMAKE_CXX_FLAGS="-include cstdint" \
     && make -j"$(nproc)" \
     && make install \
     && ldconfig
