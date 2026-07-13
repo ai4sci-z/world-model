@@ -176,7 +176,23 @@ def main() -> int:
                 source_component=int(SPEC.get("mavlink_bootstrap_source_component", 190)),
                 dialect="ardupilotmega",
             )
-            heartbeat = master.wait_heartbeat(timeout=float(SPEC.get("readiness_timeout_sec", 45.0)))
+            # A heartbeat alone is not proof of the autopilot: companion-side
+            # GCS heartbeats (e.g. the external-nav sender, sysid 191) can be
+            # the first to reach this port, and pymavlink takes no target from
+            # GCS-type heartbeats -- target_system stays 0 (broadcast), so the
+            # later mode/arm/takeoff commands are ignored by the FCU. Keep
+            # waiting until a heartbeat actually binds the autopilot target.
+            deadline = time.monotonic() + float(SPEC.get("readiness_timeout_sec", 45.0))
+            heartbeat = None
+            while time.monotonic() < deadline:
+                beat = master.wait_heartbeat(timeout=max(0.5, deadline - time.monotonic()))
+                if not beat:
+                    break
+                heartbeat = beat
+                if int(master.target_system or 0) != 0:
+                    break
+            if int(master.target_system or 0) == 0:
+                heartbeat = None
             status["mavlink_bootstrap"] = {
                 "ok": bool(heartbeat),
                 "target_system": int(master.target_system or 0),
