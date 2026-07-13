@@ -622,6 +622,17 @@ func officialBaselineServiceSpec(
 			"DDS_ENABLE":         "1",
 			"RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
 			"PYTHONPATH":         containerWorkspace,
+			// gz-sim's sensor rendering (gpu_lidar) must not go through Mesa:
+			// in-container glvnd otherwise selects libEGL_mesa, whose gallium
+			// driver segfaults in driCreateNewScreen3 and takes the whole gz
+			// server down (ArduPilotPlugin never binds 9002 -> SITL lockstep
+			// deadlock -> no MAVLink heartbeat). Pin the NVIDIA EGL vendor and
+			// request the GPU. Requires nvidia-container-toolkit on the host
+			// with default-runtime=nvidia; on hosts without an NVIDIA GPU these
+			// three entries must be dropped or gazebo cannot initialize EGL.
+			"NVIDIA_VISIBLE_DEVICES":         "all",
+			"NVIDIA_DRIVER_CAPABILITIES":     "all",
+			"__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/10_nvidia.json",
 		},
 		CWD:         containerWorkspace,
 		Volumes:     volumes,
