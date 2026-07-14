@@ -30,7 +30,7 @@ except ModuleNotFoundError:
 
 from navlab.real.companion.nodes.pose_mirror import NedPoseSample, build_pose_stamped_fields, ned_to_gazebo_pose
 
-MAVLINK_TIME_SOURCE = "sender_monotonic_clock_us"
+MAVLINK_TIME_SOURCE = "odometry_header_stamp_us"
 MAVLINK_POSITION_FRAME = "MAV_FRAME_LOCAL_FRD"
 MAVLINK_VELOCITY_FRAME = "MAV_FRAME_BODY_FRD"
 MAVLINK_ESTIMATOR_TYPE = "MAV_ESTIMATOR_TYPE_VIO"
@@ -243,6 +243,7 @@ class MavlinkExternalNavSender(Node):
         self._last_local_position_monotonic = 0.0
         self._last_sent_x: float | None = None
         self._last_sent_y: float | None = None
+        self._last_sent_time_usec: int | None = None
         self._last_limited_odom_x: float | None = None
         self._last_limited_odom_y: float | None = None
         self._last_sent_xy_monotonic = 0.0
@@ -292,8 +293,28 @@ class MavlinkExternalNavSender(Node):
         odom = self._last_odom
         pose = odom.pose.pose
         twist = odom.twist.twist
-        time_usec = int(time.monotonic() * 1000000)
-        xy_dt_sec = now_monotonic - self._last_sent_xy_monotonic if self._last_sent_xy_monotonic > 0.0 else 0.0
+        # Timestamp the sample with the odometry header stamp, not the sender's
+        # wall clock. The autopilot's EKF correlates time_usec against its own
+        # clock, which under lockstep simulation is SIM time: a wall-clock stamp
+        # drifts against it at the real-time-factor rate, so the EKF fuses every
+        # position at a wandering effective delay and its velocity estimate
+        # oscillates (dataflash-verified hover limit cycle ending in a flip).
+        # The header stamp is the measurement's native time base in both worlds
+        # (sim time in simulation, wall clock on real hardware).
+        time_usec = int(odom.header.stamp.sec) * 1000000 + int(odom.header.stamp.nanosec) // 1000
+        if self._last_sent_time_usec is not None and time_usec <= self._last_sent_time_usec:
+            # No new odometry sample: re-sending the stale pose with a fresh
+            # timestamp would feed the EKF phantom zero-velocity measurements.
+            return
+        # The XY slew limit must also run on measurement time; wall-clock dt
+        # rescales the limit by the real-time factor (0.25 m/s wall was ~0.8 m/s
+        # sim on the slow WSL host but chokes the feed on faster native hosts,
+        # lagging the reported position behind the vehicle mid-oscillation).
+        xy_dt_sec = (
+            (time_usec - self._last_sent_time_usec) / 1e6
+            if self._last_sent_time_usec is not None
+            else 0.0
+        )
         odom_x_m, odom_y_m = rate_limit_xy(
             target_x=float(pose.position.x),
             target_y=float(pose.position.y),
@@ -312,8 +333,9 @@ class MavlinkExternalNavSender(Node):
         self._last_sent_x = x_m
         self._last_sent_y = y_m
         self._last_sent_xy_monotonic = now_monotonic
+        self._last_sent_time_usec = time_usec
 
-        q = self._odometry_quaternion(pose, now_monotonic=now_monotonic)
+        q = self._odometry_quaternion(pose, now_monotonic=now_monotonic, meas_dt_sec=xy_dt_sec)
         rollspeed_radps, pitchspeed_radps = self._roll_pitch_speeds(twist, now_monotonic=now_monotonic)
         yawspeed_radps = self._limit_yawspeed(float(twist.angular.z))
 
@@ -400,7 +422,9 @@ class MavlinkExternalNavSender(Node):
         message.pose.orientation.w = fields["qw"]
         self._local_position_pose_pub.publish(message)
 
-    def _odometry_quaternion(self, pose: object, *, now_monotonic: float | None = None) -> list[float]:
+    def _odometry_quaternion(
+        self, pose: object, *, now_monotonic: float | None = None, meas_dt_sec: float | None = None
+    ) -> list[float]:
         if now_monotonic is None:
             now_monotonic = time.monotonic()
         if self._use_fcu_roll_pitch and self._fcu_roll_rad is not None and self._fcu_pitch_rad is not None:
@@ -410,7 +434,7 @@ class MavlinkExternalNavSender(Node):
                     if self._yaw_alignment_offset_rad is None:
                         self._yaw_alignment_offset_rad = self._fcu_yaw_rad - yaw_ned_rad
                     yaw_ned_rad += self._yaw_alignment_offset_rad
-                yaw_ned_rad = self._limit_yaw(yaw_ned_rad, now_monotonic=now_monotonic)
+                yaw_ned_rad = self._limit_yaw(yaw_ned_rad, now_monotonic=now_monotonic, meas_dt_sec=meas_dt_sec)
                 return _quat_from_roll_pitch_yaw_frd(
                     roll_rad=0.0,
                     pitch_rad=0.0,
@@ -431,8 +455,13 @@ class MavlinkExternalNavSender(Node):
             return 0.0, 0.0
         return float(twist.angular.x), -float(twist.angular.y)
 
-    def _limit_yaw(self, target_yaw_rad: float, *, now_monotonic: float) -> float:
-        yaw_dt_sec = now_monotonic - self._last_sent_yaw_monotonic if self._last_sent_yaw_monotonic > 0.0 else 0.0
+    def _limit_yaw(self, target_yaw_rad: float, *, now_monotonic: float, meas_dt_sec: float | None = None) -> float:
+        # Prefer measurement-time dt (odometry header stamps): a wall-clock dt
+        # rescales the yaw slew limit by the simulation real-time factor.
+        if meas_dt_sec is not None:
+            yaw_dt_sec = meas_dt_sec
+        else:
+            yaw_dt_sec = now_monotonic - self._last_sent_yaw_monotonic if self._last_sent_yaw_monotonic > 0.0 else 0.0
         yaw_rad = rate_limit_yaw(
             target_yaw_rad=target_yaw_rad,
             last_yaw_rad=self._last_sent_yaw_rad,
