@@ -164,6 +164,12 @@ class NavlabExternalNavBridgeNode : public rclcpp::Node {
     update_horizontal_span(*msg);
     last_odom_ = msg;
     last_odom_wall_time_ = stamp;
+    // Event-driven output: forward every accepted fresh sample so the
+    // downstream MAVLink sender (which dedups by header stamp) can aid the
+    // EKF at the SLAM rate instead of the status timer's 2 Hz.
+    if (compute_ready_state().ready) {
+      publish_external_nav_odom();
+    }
   }
 
   void handle_imu(const sensor_msgs::msg::Imu::SharedPtr msg) {
@@ -207,51 +213,71 @@ class NavlabExternalNavBridgeNode : public rclcpp::Node {
     last_height_ = parse_height_estimate(msg->data);
   }
 
-  void publish_status() {
+  struct ReadyState {
+    double odom_age_ms{-1.0};
+    double imu_age_ms{-1.0};
+    double height_age_ms{-1.0};
+    double scan_age_ms{-1.0};
+    bool odom_fresh{false};
+    bool imu_ok{false};
+    bool scan_ok{false};
+    bool frame_ok{false};
+    bool rate_ok{false};
+    bool height_fresh{false};
+    bool height_parse_ok{false};
+    bool height_covariance_ok{false};
+    bool ready{false};
+    SlamQuality slam_quality;
+  };
+
+  ReadyState compute_ready_state() {
+    ReadyState s;
     const auto stamp = SteadyClock::now();
-    const double odom_age_ms = age_ms(stamp, last_odom_wall_time_, last_odom_);
-    const double imu_age_ms = age_ms(stamp, last_imu_wall_time_, last_imu_);
-    const double height_age_ms =
-        age_ms(stamp, last_height_wall_time_, last_height_raw_);
-    const double scan_age_ms = age_ms(stamp, last_scan_wall_time_, last_scan_);
-    const bool odom_fresh = last_odom_ && odom_age_ms >= 0.0 &&
-                            odom_age_ms < static_cast<double>(odom_timeout_ms_);
-    const bool imu_ok =
-        last_imu_ && imu_age_ms >= 0.0 &&
-        imu_age_ms < static_cast<double>(imu_timeout_ms_);
-    const bool scan_ok =
-        last_scan_ && scan_age_ms >= 0.0 &&
-        scan_age_ms < static_cast<double>(scan_timeout_ms_);
-    const bool frame_ok = odom_frame_ok();
-    const bool rate_ok = odom_rate_hz_ >= min_odom_rate_hz_;
-    const bool odom_ok = odom_fresh && frame_ok && rate_ok;
-    const bool height_fresh =
-        last_height_raw_ && height_age_ms >= 0.0 &&
-        height_age_ms < static_cast<double>(height_timeout_ms_);
-    const bool height_parse_ok = last_height_.has_value();
-    const bool height_covariance_ok =
-        height_parse_ok && last_height_->covariance >= 0.0 &&
-        last_height_->covariance <= max_height_covariance_;
-    const bool height_ok =
-        height_fresh && height_parse_ok && height_covariance_ok;
+    s.odom_age_ms = age_ms(stamp, last_odom_wall_time_, last_odom_);
+    s.imu_age_ms = age_ms(stamp, last_imu_wall_time_, last_imu_);
+    s.height_age_ms = age_ms(stamp, last_height_wall_time_, last_height_raw_);
+    s.scan_age_ms = age_ms(stamp, last_scan_wall_time_, last_scan_);
+    s.odom_fresh = last_odom_ && s.odom_age_ms >= 0.0 &&
+                   s.odom_age_ms < static_cast<double>(odom_timeout_ms_);
+    s.imu_ok = last_imu_ && s.imu_age_ms >= 0.0 &&
+               s.imu_age_ms < static_cast<double>(imu_timeout_ms_);
+    s.scan_ok = last_scan_ && s.scan_age_ms >= 0.0 &&
+                s.scan_age_ms < static_cast<double>(scan_timeout_ms_);
+    s.frame_ok = odom_frame_ok();
+    s.rate_ok = odom_rate_hz_ >= min_odom_rate_hz_;
+    const bool odom_ok = s.odom_fresh && s.frame_ok && s.rate_ok;
+    s.height_fresh = last_height_raw_ && s.height_age_ms >= 0.0 &&
+                     s.height_age_ms < static_cast<double>(height_timeout_ms_);
+    s.height_parse_ok = last_height_.has_value();
+    s.height_covariance_ok = s.height_parse_ok && last_height_->covariance >= 0.0 &&
+                             last_height_->covariance <= max_height_covariance_;
+    const bool height_ok = s.height_fresh && s.height_parse_ok && s.height_covariance_ok;
 
-    const SlamQuality slam_quality =
-        evaluate_slam_quality(stamp, odom_fresh, frame_ok, rate_ok, imu_ok,
-                              scan_ok, odom_age_ms, imu_age_ms, scan_age_ms);
-    const bool quality_ok = !slam_quality_gate_enabled_ || slam_quality.good;
-    const bool ready = odom_ok && quality_ok && (!require_imu_for_output_ || imu_ok) &&
-                       (!require_height_for_output_ || height_ok);
+    s.slam_quality =
+        evaluate_slam_quality(stamp, s.odom_fresh, s.frame_ok, s.rate_ok, s.imu_ok,
+                              s.scan_ok, s.odom_age_ms, s.imu_age_ms, s.scan_age_ms);
+    const bool quality_ok = !slam_quality_gate_enabled_ || s.slam_quality.good;
+    s.ready = odom_ok && quality_ok && (!require_imu_for_output_ || s.imu_ok) &&
+              (!require_height_for_output_ || height_ok);
+    return s;
+  }
 
-    if (ready) {
-      publish_external_nav_odom();
-    }
+  void publish_status() {
+    // Status stays on the 500ms timer, but the odometry output does NOT: the
+    // external-nav feed is the autopilot EKF's only position aiding source,
+    // and a timer-paced feed caps it at 2 Hz wall time regardless of the SLAM
+    // rate. Position-only aiding at 2 Hz starves the EKF velocity estimate
+    // into a hover limit cycle that diverges (dataflash-verified flip ~15 s
+    // after takeoff). Odometry is now published per fresh sample from
+    // handle_odom instead.
+    const ReadyState s = compute_ready_state();
 
     std_msgs::msg::String status;
     status.data =
-        build_status(odom_fresh, frame_ok, rate_ok, imu_ok, height_fresh,
-                     height_parse_ok, height_covariance_ok, ready, odom_age_ms,
-                     imu_age_ms, height_age_ms, scan_ok, scan_age_ms,
-                     slam_quality);
+        build_status(s.odom_fresh, s.frame_ok, s.rate_ok, s.imu_ok, s.height_fresh,
+                     s.height_parse_ok, s.height_covariance_ok, s.ready, s.odom_age_ms,
+                     s.imu_age_ms, s.height_age_ms, s.scan_ok, s.scan_age_ms,
+                     s.slam_quality);
     status_pub_->publish(status);
   }
 
@@ -261,7 +287,9 @@ class NavlabExternalNavBridgeNode : public rclcpp::Node {
     }
 
     nav_msgs::msg::Odometry out = *last_odom_;
-    out.header.stamp = now();
+    // Keep the measurement's own stamp: re-stamping with now() makes stale
+    // samples look fresh downstream and breaks stamp-based deduplication.
+    out.header.stamp = last_odom_->header.stamp;
     out.header.frame_id = output_frame_id_;
     out.child_frame_id = output_child_frame_id_;
     out.pose.pose.position.z = last_height_->z;
