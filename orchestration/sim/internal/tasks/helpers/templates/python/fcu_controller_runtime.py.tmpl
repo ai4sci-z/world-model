@@ -205,6 +205,51 @@ def main() -> int:
             state["mavlink_target_system"] = int(master.target_system or 0)
             state["mavlink_target_component"] = int(master.target_component or 0)
 
+            # The EKF origin must exist BEFORE arming. The SITL profile's
+            # ahrs-set-origin Lua script cannot set it until ahrs:initialised()
+            # flips (~25 sim-seconds after boot), which lands mid-flight for any
+            # mission still airborne by then and yanks the EKF position and
+            # altitude datum out from under the position controller
+            # (dataflash-verified estimate runaway). Set it here first; the Lua
+            # script then sees the origin already present and no-ops.
+            origin_lat = float(SPEC.get("ekf_origin_lat", -35.363262))
+            origin_lon = float(SPEC.get("ekf_origin_lon", 149.165237))
+            origin_alt_m = float(SPEC.get("ekf_origin_alt_m", 584.0))
+            origin_deadline = time.monotonic() + float(SPEC.get("readiness_timeout_sec", 45.0))
+            origin_ok = False
+            origin_attempts = 0
+            while time.monotonic() < origin_deadline:
+                origin_attempts += 1
+                master.mav.set_gps_global_origin_send(
+                    int(master.target_system),
+                    int(round(origin_lat * 1e7)),
+                    int(round(origin_lon * 1e7)),
+                    int(round(origin_alt_m * 1e3)),
+                )
+                master.mav.command_long_send(
+                    int(master.target_system),
+                    int(master.target_component or 1),
+                    mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,
+                    0,
+                    float(mavutil.mavlink.MAVLINK_MSG_ID_GPS_GLOBAL_ORIGIN),
+                    0, 0, 0, 0, 0, 0,
+                )
+                echo = master.recv_match(type="GPS_GLOBAL_ORIGIN", blocking=True, timeout=2.0)
+                if echo is not None:
+                    origin_ok = True
+                    break
+            status["ekf_origin"] = {
+                "ok": origin_ok,
+                "attempts": origin_attempts,
+                "lat": origin_lat,
+                "lon": origin_lon,
+                "alt_m": origin_alt_m,
+            }
+            publish_bootstrap_status(status)
+            if not origin_ok:
+                status["state"] = "ekf_origin_failed"
+                return status
+
             mode_id = master.mode_mapping().get("GUIDED") or guided_mode
             master.set_mode(int(mode_id))
             mode_ok = wait_mavlink_guided(master, int(mode_id))
