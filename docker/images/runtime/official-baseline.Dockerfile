@@ -82,8 +82,19 @@ ARG MICRO_XRCE_DDS_GEN_REF=v4.7.0
 WORKDIR ${OFFICIAL_WS}/src
 
 RUN --mount=type=cache,target=/root/.cache/git,sharing=locked \
-    git clone --depth 1 --recurse-submodules --shallow-submodules \
-      --branch "${ARDUPILOT_REF}" https://github.com/ArduPilot/ardupilot.git ardupilot && \
+    { \
+      # ARDUPILOT_REF may be a branch/tag (fast path) or a commit SHA: an
+      # unpinned "master" made the firmware drift between image rebuilds
+      # (reproducibility hazard, flagged in the migration notes). GitHub
+      # allows fetching an arbitrary SHA directly.
+      git clone --depth 1 --recurse-submodules --shallow-submodules \
+        --branch "${ARDUPILOT_REF}" https://github.com/ArduPilot/ardupilot.git ardupilot || \
+      { rm -rf ardupilot && mkdir ardupilot && cd ardupilot && git init -q && \
+        git remote add origin https://github.com/ArduPilot/ardupilot.git && \
+        git fetch --depth 1 origin "${ARDUPILOT_REF}" && \
+        git checkout -q FETCH_HEAD && \
+        git submodule update --init --recursive --depth 1 && cd ..; }; \
+    } && \
     git clone --depth 1 --branch "${ARDUPILOT_ROS_REF}" \
       https://github.com/ArduPilot/ardupilot_ros.git ardupilot_ros && \
     git clone --depth 1 --branch "${ARDUPILOT_GZ_REF}" \
