@@ -65,10 +65,13 @@ def _yaw_from_ros_quat_enu(q: object) -> float:
 def ros_enu_position_to_mavlink_local_frd(
     *, x_enu_m: float, y_enu_m: float, z_enu_m: float
 ) -> tuple[float, float, float]:
-    # ArduPilot's ODOMETRY handler requires MAV_FRAME_LOCAL_FRD. The runtime
-    # ROS map contract is x=west, y=north for the hover world, so map x projects
-    # to negative local-NED east.
-    return y_enu_m, -x_enu_m, -z_enu_m
+    # ArduPilot's ODOMETRY handler requires MAV_FRAME_LOCAL_FRD. The odom map
+    # contract is standard ENU (x=east, y=north): dataflash VISP-vs-SIM2 replay
+    # of truth-fed hover runs fits VISP.PN=+truth_N with the yaw path already
+    # matching the standard ENU formula. Negating x here mirrors the east axis
+    # (det=-1, left-handed feed) — irreconcilable with the IMU for any source
+    # frame — and the EKF innovation feedback diverges into a flip.
+    return y_enu_m, x_enu_m, -z_enu_m
 
 
 def ros_enu_yaw_to_mavlink_local_frd(yaw_enu_rad: float) -> float:
@@ -184,7 +187,7 @@ def _odometry_mapping_status(
         "field_map": {
             "time_usec": MAVLINK_TIME_SOURCE,
             "x": "odom.pose.pose.position.y",
-            "y": "-odom.pose.pose.position.x",
+            "y": "odom.pose.pose.position.x",
             "z": "-odom.pose.pose.position.z",
             "q": (
                 "level roll/pitch + converted odom yaw"

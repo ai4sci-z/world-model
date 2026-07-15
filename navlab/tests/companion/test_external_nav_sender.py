@@ -73,17 +73,20 @@ def test_odometry_quaternion_can_send_raw_slam_yaw_without_alignment() -> None:
 
 
 def test_ros_enu_position_maps_to_mavlink_local_frd_axes() -> None:
+    # Standard ENU->NED: north=y, east=x, down=-z. A negated east axis is a
+    # reflection (left-handed feed) and destabilizes EK3 (truth-fed hover
+    # dataflash replay, 2026-07-16).
     assert ros_enu_position_to_mavlink_local_frd(x_enu_m=2.0, y_enu_m=3.0, z_enu_m=0.5) == (
         3.0,
-        -2.0,
+        2.0,
         -0.5,
     )
 
 
-def test_ros_map_west_axis_projects_to_negative_local_east() -> None:
+def test_ros_enu_position_keeps_frame_right_handed() -> None:
     assert ros_enu_position_to_mavlink_local_frd(x_enu_m=-0.5, y_enu_m=0.35, z_enu_m=0.5) == (
         0.35,
-        0.5,
+        -0.5,
         -0.5,
     )
 
