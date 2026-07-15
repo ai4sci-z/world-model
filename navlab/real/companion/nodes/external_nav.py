@@ -130,6 +130,29 @@ def rate_limit_xy(
     return last_x + (dx * scale), last_y + (dy * scale)
 
 
+CLOCK_RESET_THRESHOLD_US = 1_000_000
+
+
+def classify_time_usec(time_usec: int, last_sent_time_usec: int | None) -> str:
+    """Classify an incoming odometry timestamp against the last sent one.
+
+    Returns one of:
+      "send"      -- fresh, newer sample
+      "duplicate" -- same or slightly older stamp (out-of-order/no new sample)
+      "reset"     -- stamp jumped back >= CLOCK_RESET_THRESHOLD_US: the source
+                     clock restarted (sim relaunch, rosbag loop). The sender
+                     must resync instead of starving forever.
+      "invalid"   -- non-positive stamp; never latch dedup state on it
+    """
+    if time_usec <= 0:
+        return "invalid"
+    if last_sent_time_usec is None or time_usec > last_sent_time_usec:
+        return "send"
+    if last_sent_time_usec - time_usec >= CLOCK_RESET_THRESHOLD_US:
+        return "reset"
+    return "duplicate"
+
+
 def normalize_angle_rad(angle_rad: float) -> float:
     return (angle_rad + math.pi) % (2.0 * math.pi) - math.pi
 
@@ -252,6 +275,8 @@ class MavlinkExternalNavSender(Node):
         self._last_sent_xy_monotonic = 0.0
         self._last_sent_yaw_rad: float | None = None
         self._last_sent_yaw_monotonic = 0.0
+        self._clock_reset_count = 0
+        self._invalid_stamp_count = 0
 
         self.create_subscription(Odometry, args.odom_topic, self._handle_odom, 10)
         self._status_pub = self.create_publisher(String, args.status_topic, 10)
@@ -305,10 +330,23 @@ class MavlinkExternalNavSender(Node):
         # The header stamp is the measurement's native time base in both worlds
         # (sim time in simulation, wall clock on real hardware).
         time_usec = int(odom.header.stamp.sec) * 1000000 + int(odom.header.stamp.nanosec) // 1000
-        if self._last_sent_time_usec is not None and time_usec <= self._last_sent_time_usec:
+        stamp_class = classify_time_usec(time_usec, self._last_sent_time_usec)
+        if stamp_class == "invalid":
+            self._invalid_stamp_count += 1
+            return
+        if stamp_class == "duplicate":
             # No new odometry sample: re-sending the stale pose with a fresh
             # timestamp would feed the EKF phantom zero-velocity measurements.
             return
+        if stamp_class == "reset":
+            # The measurement clock restarted (sim relaunch, rosbag loop):
+            # drop the dedup/slew state and start a fresh epoch, otherwise the
+            # feed starves until sim time outruns the pre-reset stamp.
+            self._clock_reset_count += 1
+            self._last_sent_time_usec = None
+            self._last_limited_odom_x = None
+            self._last_limited_odom_y = None
+            self._last_sent_yaw_rad = None
         # The XY slew limit must also run on measurement time; wall-clock dt
         # rescales the limit by the real-time factor (0.25 m/s wall was ~0.8 m/s
         # sim on the slow WSL host but chokes the feed on faster native hosts,
@@ -517,6 +555,8 @@ class MavlinkExternalNavSender(Node):
             "reset_counter": self._reset_counter,
             "estimator_type": MAVLINK_ESTIMATOR_TYPE,
             "time_usec_source": MAVLINK_TIME_SOURCE,
+            "clock_reset_count": self._clock_reset_count,
+            "invalid_stamp_count": self._invalid_stamp_count,
             "use_fcu_roll_pitch": self._use_fcu_roll_pitch,
             "align_yaw_to_fcu": self._align_yaw_to_fcu,
             "yaw_alignment_offset_rad": self._yaw_alignment_offset_rad,

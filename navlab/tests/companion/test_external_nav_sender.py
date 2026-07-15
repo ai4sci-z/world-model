@@ -10,6 +10,7 @@ from navlab.real.companion.nodes.external_nav import (
     _yaw_from_ros_quat_enu,
     rate_limit_xy,
     rate_limit_yaw,
+    classify_time_usec,
     ros_enu_position_to_mavlink_local_frd,
     ros_enu_yaw_to_mavlink_local_frd,
 )
@@ -89,6 +90,29 @@ def test_ros_enu_position_keeps_frame_right_handed() -> None:
         -0.5,
         -0.5,
     )
+
+
+def test_classify_time_usec_fresh_and_duplicate_stamps() -> None:
+    assert classify_time_usec(1_000, None) == "send"
+    assert classify_time_usec(2_000, 1_000) == "send"
+    assert classify_time_usec(1_000, 1_000) == "duplicate"
+    # Small regression (out-of-order sample) is deduped, not a clock reset.
+    assert classify_time_usec(999_000, 1_000_000) == "duplicate"
+
+
+def test_classify_time_usec_detects_clock_reset() -> None:
+    # Sim relaunch / rosbag loop: stamp jumps back >= 1s -> resync, else the
+    # sender starves until sim time outruns the pre-reset stamp.
+    assert classify_time_usec(5_000, 2_000_000) == "reset"
+    assert classify_time_usec(1_000_000, 2_000_000) == "reset"
+
+
+def test_classify_time_usec_never_latches_on_invalid_stamps() -> None:
+    assert classify_time_usec(0, None) == "invalid"
+    assert classify_time_usec(-5, 1_000) == "invalid"
+    # A permanently-zero stamp stream stays invalid but must not poison the
+    # dedup state: the next real stamp still sends.
+    assert classify_time_usec(1_000, None) == "send"
 
 
 def test_odometry_quaternion_does_not_feed_fcu_roll_pitch_back_to_external_nav() -> None:
