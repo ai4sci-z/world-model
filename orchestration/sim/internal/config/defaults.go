@@ -268,6 +268,13 @@ func defaultSlamHover(cfg *SlamHoverConfig) {
 	cfg.MinExternalNavRateHz = defaultFloat(cfg.MinExternalNavRateHz, 5)
 	cfg.MinFCULocalPositionRateHz = defaultFloat(cfg.MinFCULocalPositionRateHz, 2)
 	cfg.MaxLatestAgeSec = defaultFloat(cfg.MaxLatestAgeSec, 1.5)
+	// The official iris model mounts the IMU roll-180 while the ROS-side TF
+	// claims identity, so Cartographer's orientation estimate comes out
+	// yaw-flipped 180 deg against its own position track (measured: fed yaw
+	// = truth-180 with position direction cosine +1.0 vs truth). Mainline
+	// therefore corrects the IMU stream before SLAM consumes it; the frozen
+	// official model stays untouched.
+	cfg.IMUSourceCorrection = defaultString(cfg.IMUSourceCorrection, "roll180_flu")
 	cfg.HoverClaim = defaultString(cfg.HoverClaim, "evaluated")
 	cfg.ExplorationClaim = defaultString(cfg.ExplorationClaim, "not_evaluated")
 }

@@ -418,7 +418,9 @@ func assertHoverSlamRuntimeUsesCartographerAdapter(t *testing.T, path string) {
 		`cartographer_odometry_topic = '/cartographer/odometry_input'`,
 		`cartographer_tf_topic = '/navlab/slam/tf'`,
 		`external_nav_input_odom_topic = '/external_nav/odom_candidate'`,
-		`imu_source_topic = '/imu'`,
+		// Mainline hover feeds Cartographer the mount-corrected IMU stream
+		// (iris roll-180 mount, GATE-4b root cause #2).
+		`imu_source_topic = '/navlab/slam/imu_source_flu'`,
 		`imu_topic = '/navlab/slam/imu'`,
 		`launch_cartographer_backend = true`,
 		`odom_topic = '/slam/odom'`,

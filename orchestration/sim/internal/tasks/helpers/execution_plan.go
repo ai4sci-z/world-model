@@ -165,7 +165,12 @@ func BuildExecutionPlan(
 		addGazeboTruthOdomExecution(&plan)
 		moveRuntimeServiceBefore(&plan, "gazebo_truth_odom", "slam_backend")
 	}
-	if helperSet["slam"] && simulationProfile == HoverProfileIMUFLUCorrection {
+	if helperSet["slam"] && (plan.TaskID == "hover" || plan.TaskID == "hover-slam-only") {
+		// Mainline since the GATE-4b root-cause campaign: the runtime spec
+		// points Cartographer at the corrected IMU stream by default
+		// (SlamHover.IMUSourceCorrection), so every hover-family run needs
+		// the corrector service; the imu-flu-correction profile name is
+		// kept as an alias of mainline behavior.
 		addIMUFrameCorrectorExecution(&plan)
 		moveRuntimeServiceBefore(&plan, "imu_frame_corrector", "slam_backend")
 	}
