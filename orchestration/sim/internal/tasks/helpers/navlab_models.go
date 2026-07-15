@@ -54,8 +54,8 @@ func writeBridgeOverride(path string, imuRosTopic string) error {
 func WriteParamOverlayFromSource(path string, source string, spec SensorRuntimeSpec) error {
 	orientation := 25
 	overlay := missingParamLines(source, map[string]string{
-		"RNGFND1_TYPE":     "20",
-		"RNGFND1_ORIENT":   fmt.Sprintf("%d", orientation),
+		"RNGFND1_TYPE":   "20",
+		"RNGFND1_ORIENT": fmt.Sprintf("%d", orientation),
 		// ArduPilot 4.5 renamed RNGFND1_MIN_CM/MAX_CM/GNDCLEAR to MIN/MAX/GNDCLR
 		// (cm->m); the old names are silently ignored by current firmware, so MIN
 		// fell to its 0.20 m default and the 0.095 m sim reading was rejected.

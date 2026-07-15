@@ -310,11 +310,7 @@ class MavlinkExternalNavSender(Node):
         # rescales the limit by the real-time factor (0.25 m/s wall was ~0.8 m/s
         # sim on the slow WSL host but chokes the feed on faster native hosts,
         # lagging the reported position behind the vehicle mid-oscillation).
-        xy_dt_sec = (
-            (time_usec - self._last_sent_time_usec) / 1e6
-            if self._last_sent_time_usec is not None
-            else 0.0
-        )
+        xy_dt_sec = (time_usec - self._last_sent_time_usec) / 1e6 if self._last_sent_time_usec is not None else 0.0
         odom_x_m, odom_y_m = rate_limit_xy(
             target_x=float(pose.position.x),
             target_y=float(pose.position.y),

@@ -440,23 +440,23 @@ type FrameContractSpec struct {
 	// probe. Matching a late-joining subscription to the ArduPilot micro-ROS
 	// agent's publishers takes ~30s of DDS endpoint discovery (measured), so
 	// the default 8s template budget misses /ap/v1/pose/filtered every time.
-	ProbeTimeoutSec         float64
+	ProbeTimeoutSec float64
 }
 
 func DefaultFrameContractSpec() FrameContractSpec {
 	return FrameContractSpec{
-		RequiredFrames:          []string{"map", "odom", "base_link", "imu_link", "base_scan", "rangefinder_down_frame"},
-		MapFrameID:              "map",
-		OdomFrameID:             "odom",
-		BaseFrameID:             "base_link",
-		IMUFrameID:              "imu_link",
-		LaserFrameID:            "base_scan",
-		RangefinderFrameID:      "rangefinder_down_frame",
-		ScanTopic:               "/scan",
-		IMUTopic:                "/imu",
-		RangefinderRangeTopic:   "/rangefinder/down/range",
-		RangefinderStatusTopic:  "/rangefinder/down/status",
-		FCUPoseTopic:            "/navlab/fcu/local_position_pose", // was /ap/v1/pose/filtered:
+		RequiredFrames:         []string{"map", "odom", "base_link", "imu_link", "base_scan", "rangefinder_down_frame"},
+		MapFrameID:             "map",
+		OdomFrameID:            "odom",
+		BaseFrameID:            "base_link",
+		IMUFrameID:             "imu_link",
+		LaserFrameID:           "base_scan",
+		RangefinderFrameID:     "rangefinder_down_frame",
+		ScanTopic:              "/scan",
+		IMUTopic:               "/imu",
+		RangefinderRangeTopic:  "/rangefinder/down/range",
+		RangefinderStatusTopic: "/rangefinder/down/status",
+		FCUPoseTopic:           "/navlab/fcu/local_position_pose", // was /ap/v1/pose/filtered:
 		// the DDS debug stream has no consumer in the pipeline and its late-join
 		// endpoint matching to the micro-ROS agent has an unbounded tail (measured
 		// 29s..97s+). The contract being probed is 'FCU pose is available', and the
@@ -1125,13 +1125,13 @@ type ExplorationWorkflowSpec struct {
 
 func DefaultExplorationWorkflowSpec() ExplorationWorkflowSpec {
 	return ExplorationWorkflowSpec{
-		Strategy:               "frontier_lite",
-		ExplorationWindowSec:   26.0,
-		MotionSpeedMPS:         0.10,
-		YawRateRadPS:           0.18,
-		MinAcceptedGoals:       3,
-		MinPathLengthM:         0.35,
-		ProbeTimeoutSec:        90.0, // was 35: probe launches with services and must still be
+		Strategy:             "frontier_lite",
+		ExplorationWindowSec: 26.0,
+		MotionSpeedMPS:       0.10,
+		YawRateRadPS:         0.18,
+		MinAcceptedGoals:     3,
+		MinPathLengthM:       0.35,
+		ProbeTimeoutSec:      90.0, // was 35: probe launches with services and must still be
 		// observing when exploration completes (readiness ~45s + 26s window); 35s closed
 		// before slower-converging runs could report ok=true (same calibration family as
 		// the frame-contract 45s budget).

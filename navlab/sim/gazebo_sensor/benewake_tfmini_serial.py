@@ -248,9 +248,7 @@ def run(argv: list[str] | None = None) -> int:
             super().__init__("benewake_tfmini_serial_emulator")
             self._started_at = time.monotonic()
             emulator.open()
-            self.create_subscription(
-                LaserScan, config.scan_ideal_topic, self._handle_scan, qos_profile_sensor_data
-            )
+            self.create_subscription(LaserScan, config.scan_ideal_topic, self._handle_scan, qos_profile_sensor_data)
             self.create_timer(max(0.001, 1.0 / config.rate_hz), self._write_frame)
             self.create_timer(2.0, self._log_status)
             if args.duration_sec > 0:
