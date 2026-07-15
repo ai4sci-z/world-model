@@ -372,6 +372,34 @@ func cycloneDDSParticipantEnv() string {
 	return "<CycloneDDS><Domain><Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>512</MaxAutoParticipantIndex></Discovery></Domain></CycloneDDS>"
 }
 
+func officialBaselineEnv(project config.ProjectConfig, containerWorkspace string) map[string]string {
+	env := map[string]string{
+		"SESSION_ID":         project.SessionID,
+		"ROS_DOMAIN_ID":      runtimeRosDomain(project),
+		"DDS_DOMAIN_ID":      runtimeRosDomain(project),
+		"ROS_DISTRO":         runtimeRosDistro(project),
+		"DDS_ENABLE":         "1",
+		"RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
+		"PYTHONPATH":         containerWorkspace,
+	}
+	// gz-sim's sensor rendering (gpu_lidar) must not go through Mesa on
+	// NVIDIA hosts: in-container glvnd otherwise selects libEGL_mesa, whose
+	// gallium driver segfaults in driCreateNewScreen3 and takes the whole gz
+	// server down (ArduPilotPlugin never binds 9002 -> SITL lockstep
+	// deadlock -> no MAVLink heartbeat). official.gpu_vendor="nvidia"
+	// (default) pins the NVIDIA EGL vendor and requests the GPU — it
+	// requires nvidia-container-toolkit with default-runtime=nvidia on the
+	// host. Set official.gpu_vendor="none" on hosts without an NVIDIA GPU
+	// (CPU/Mesa, AMD, CI): there the vendor JSON does not exist and these
+	// entries would keep gazebo from initializing EGL at all.
+	if project.Official.GPUVendor == "nvidia" {
+		env["NVIDIA_VISIBLE_DEVICES"] = "all"
+		env["NVIDIA_DRIVER_CAPABILITIES"] = "all"
+		env["__EGL_VENDOR_LIBRARY_FILENAMES"] = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+	}
+	return env
+}
+
 func runtimeRosDomain(project config.ProjectConfig) string {
 	if strings.TrimSpace(project.Official.DDSDomainID) != "" {
 		return project.Official.DDSDomainID
@@ -614,33 +642,14 @@ func officialBaselineServiceSpec(
 		Image:         image,
 		ContainerName: "navlab-official-baseline",
 		Command:       []string{"bash", "-lc", command},
-		Env: map[string]string{
-			"SESSION_ID":         project.SessionID,
-			"ROS_DOMAIN_ID":      runtimeRosDomain(project),
-			"DDS_DOMAIN_ID":      runtimeRosDomain(project),
-			"ROS_DISTRO":         runtimeRosDistro(project),
-			"DDS_ENABLE":         "1",
-			"RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
-			"PYTHONPATH":         containerWorkspace,
-			// gz-sim's sensor rendering (gpu_lidar) must not go through Mesa:
-			// in-container glvnd otherwise selects libEGL_mesa, whose gallium
-			// driver segfaults in driCreateNewScreen3 and takes the whole gz
-			// server down (ArduPilotPlugin never binds 9002 -> SITL lockstep
-			// deadlock -> no MAVLink heartbeat). Pin the NVIDIA EGL vendor and
-			// request the GPU. Requires nvidia-container-toolkit on the host
-			// with default-runtime=nvidia; on hosts without an NVIDIA GPU these
-			// three entries must be dropped or gazebo cannot initialize EGL.
-			"NVIDIA_VISIBLE_DEVICES":         "all",
-			"NVIDIA_DRIVER_CAPABILITIES":     "all",
-			"__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/10_nvidia.json",
-		},
-		CWD:         containerWorkspace,
-		Volumes:     volumes,
-		Networks:    []string{"host"},
-		Detach:      true,
-		Required:    true,
-		LogPath:     artifactlayout.RuntimeLog(artifactDir, "official_baseline.start.log"),
-		ServiceRole: "official-baseline",
+		Env:           officialBaselineEnv(project, containerWorkspace),
+		CWD:           containerWorkspace,
+		Volumes:       volumes,
+		Networks:      []string{"host"},
+		Detach:        true,
+		Required:      true,
+		LogPath:       artifactlayout.RuntimeLog(artifactDir, "official_baseline.start.log"),
+		ServiceRole:   "official-baseline",
 	}, nil
 }
 

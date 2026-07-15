@@ -276,6 +276,63 @@ func TestBuildRuntimeSpecsUsesRuntimeRosDistroOverride(t *testing.T) {
 	}
 }
 
+func TestOfficialBaselineGPUEnvFollowsConfiguredVendor(t *testing.T) {
+	t.Setenv("NAVLAB_SIM_DISTRO", "")
+	t.Setenv("NAVLAB_SIM_IMAGE_TAG", "")
+	t.Setenv("NAVLAB_SIM_RUNTIME_IMAGE_TAG", "")
+	baseProject := func(gpuVendor string) config.ProjectConfig {
+		return config.ProjectConfig{
+			Orchestration: config.OrchestrationConfig{
+				Runtime: config.OrchestrationRuntimeConfig{
+					Docker: config.DockerRuntimeConfig{WorkspaceContainerPath: "/workspace"},
+				},
+			},
+			Paths:       config.PathConfig{WorkspaceRoot: "."},
+			RosDomainID: "85",
+			Official:    config.OfficialConfig{GPUVendor: gpuVendor},
+			Navlab: config.NavlabConfig{
+				Images: config.ImageCatalog{TagPolicy: "distro-latest", Distro: "humble"},
+			},
+			Images: map[string]config.Image{
+				"mavlink_router":    {Repository: "navlab/mavlink-router"},
+				"official_baseline": {Repository: "navlab/official-baseline"},
+			},
+		}
+	}
+	gpuKeys := []string{"NVIDIA_VISIBLE_DEVICES", "NVIDIA_DRIVER_CAPABILITIES", "__EGL_VENDOR_LIBRARY_FILENAMES"}
+
+	bundle, err := BuildRuntimeSpecs(baseProject("nvidia"), helpers.ExecutionPlan{TaskID: "navigation"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	official := serviceByName(bundle.Services, "official_baseline")
+	if official == nil {
+		t.Fatalf("services = %#v", bundle.Services)
+	}
+	for _, key := range gpuKeys {
+		if official.Env[key] == "" {
+			t.Fatalf("gpu_vendor=nvidia must inject %s, env = %#v", key, official.Env)
+		}
+	}
+
+	bundle, err = BuildRuntimeSpecs(baseProject("none"), helpers.ExecutionPlan{TaskID: "navigation"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	official = serviceByName(bundle.Services, "official_baseline")
+	if official == nil {
+		t.Fatalf("services = %#v", bundle.Services)
+	}
+	for _, key := range gpuKeys {
+		if _, present := official.Env[key]; present {
+			t.Fatalf("gpu_vendor=none must not inject %s, env = %#v", key, official.Env)
+		}
+	}
+	if official.Env["ROS_DOMAIN_ID"] != "85" {
+		t.Fatalf("baseline env lost its non-GPU entries: %#v", official.Env)
+	}
+}
+
 func TestBuildRuntimeSpecsMountsOfficialModelAndParamOverlays(t *testing.T) {
 	t.Setenv("NAVLAB_SIM_DISTRO", "jazzy")
 	t.Setenv("NAVLAB_SIM_IMAGE_TAG", "")

@@ -36,6 +36,7 @@ func applySimulationDefaults(cfg *ProjectConfig) {
 	cfg.Official.CartographerLaunch = defaultString(cfg.Official.CartographerLaunch, "ros2 launch ardupilot_cartographer cartographer.launch.py")
 	cfg.Official.GazeboBringupMode = defaultString(cfg.Official.GazeboBringupMode, "navlab_custom_bringup")
 	cfg.Official.ExternalNavRoute = defaultString(cfg.Official.ExternalNavRoute, "mavlink_fallback")
+	cfg.Official.GPUVendor = defaultString(cfg.Official.GPUVendor, "nvidia")
 
 	cfg.OfficialMazeX2.WorldSource = defaultString(cfg.OfficialMazeX2.WorldSource, "official_iris_maze")
 	cfg.OfficialMazeX2.VehicleModelSource = defaultString(cfg.OfficialMazeX2.VehicleModelSource, "official_iris_with_lidar")

@@ -163,6 +163,14 @@ type OfficialConfig struct {
 	CartographerLaunch    string   `mapstructure:"cartographer_launch"`
 	GazeboBringupMode     string   `mapstructure:"gazebo_bringup_mode"`
 	ExternalNavRoute      string   `mapstructure:"external_nav_route"`
+	// GPUVendor controls the GPU wiring of the official-baseline container.
+	// "nvidia" (default) requests the GPU and pins the NVIDIA EGL vendor so
+	// gz-sim sensor rendering does not fall into the in-container Mesa
+	// gallium driver (segfault -> SITL lockstep deadlock, see GATE-4 native
+	// migration evidence). "none" injects nothing — required on hosts
+	// without an NVIDIA GPU (CPU/Mesa, AMD, CI), where the NVIDIA vendor
+	// JSON does not exist and gazebo could not initialize EGL at all.
+	GPUVendor string `mapstructure:"gpu_vendor"`
 }
 
 type OfficialMazeX2Config struct {
