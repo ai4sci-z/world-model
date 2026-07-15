@@ -34,6 +34,12 @@ def test_gazebo_sensor_docker_target_owns_vendor_driver_dependency() -> None:
     assert "third_party/ydlidar_ros2_driver" not in companion_dockerfile
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="submodule pin 6b9f249 (upstream master) still uses argless declare_parameter(); "
+    "upstream origin/humble (4ef70d3) has the jazzy-compatible declarations but diverges from "
+    "master by 9/5 commits — repin only after real-machine X2 validation",
+)
 def test_vendor_driver_uses_jazzy_compatible_parameter_declarations() -> None:
     source_path = Path("third_party/ydlidar_ros2_driver/src/ydlidar_ros2_driver_node.cpp")
     if not source_path.exists():

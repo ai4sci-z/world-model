@@ -37,7 +37,9 @@ def test_cartographer_backend_generates_launch_command_from_runtime_config() -> 
     assert "laser_frame:=laser_frame" in command
     assert "laser_z:=0" in command
     assert "cartographer_odometry_topic:=/cartographer/odometry_input" in command
-    assert "cartographer_configuration_directory:=" in command
+    # Empty launch arguments are omitted (ROS 2 launch rejects empty 'name:='),
+    # so an unset cartographer_configuration_directory must not appear at all.
+    assert "cartographer_configuration_directory:=" not in command
     assert "cartographer_odometry_topic:=/odometry" not in command
     assert "publish_global_tf:=true" in command
     assert "global_tf_topic:=/tf" in command
