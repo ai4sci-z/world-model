@@ -130,27 +130,83 @@ def rate_limit_xy(
     return last_x + (dx * scale), last_y + (dy * scale)
 
 
-CLOCK_RESET_THRESHOLD_US = 1_000_000
+EPOCH_BREAK_BACK_US = 1_000_000
+EPOCH_BREAK_FORWARD_US = 10_000_000
+EPOCH_CONFIRM_SAMPLES = 3
 
 
-def classify_time_usec(time_usec: int, last_sent_time_usec: int | None) -> str:
-    """Classify an incoming odometry timestamp against the last sent one.
+class TimestampEpochGate:
+    """Timestamp-epoch contract for the external-nav feed.
 
-    Returns one of:
-      "send"      -- fresh, newer sample
-      "duplicate" -- same or slightly older stamp (out-of-order/no new sample)
-      "reset"     -- stamp jumped back >= CLOCK_RESET_THRESHOLD_US: the source
-                     clock restarted (sim relaunch, rosbag loop). The sender
-                     must resync instead of starving forever.
-      "invalid"   -- non-positive stamp; never latch dedup state on it
+    Contract (R003-F12): a measurement-clock epoch change (sim relaunch,
+    rosbag loop) may only be adopted after EPOCH_CONFIRM_SAMPLES consecutive,
+    mutually monotonic samples from the new epoch. A single regressed stamp
+    — however far back — is a stale/delayed packet and is DROPPED, never
+    sent and never treated as a reset. Symmetrically, a forward jump beyond
+    EPOCH_BREAK_FORWARD_US (e.g. a straggler from the pre-reset epoch
+    arriving after a reset) is an epoch-break candidate, not a send.
+    Verdicts:
+      "send"        -- in-epoch fresh sample; caller sends normally
+      "reset_send"  -- epoch change confirmed on this sample; caller must
+                       atomically clear dedup/slew state, then send
+      "drop_duplicate" -- same stamp or small (<EPOCH_BREAK_BACK_US)
+                       regression: no new measurement
+      "drop_stale"  -- epoch-break candidate not yet confirmed; dropped
+      "drop_invalid" -- non-positive stamp; never latches any state
+    Boundary: loops shorter than EPOCH_BREAK_BACK_US are indistinguishable
+    from out-of-order packets and stay deduped by design.
     """
-    if time_usec <= 0:
-        return "invalid"
-    if last_sent_time_usec is None or time_usec > last_sent_time_usec:
-        return "send"
-    if last_sent_time_usec - time_usec >= CLOCK_RESET_THRESHOLD_US:
-        return "reset"
-    return "duplicate"
+
+    def __init__(
+        self,
+        *,
+        back_threshold_us: int = EPOCH_BREAK_BACK_US,
+        forward_threshold_us: int = EPOCH_BREAK_FORWARD_US,
+        confirm_samples: int = EPOCH_CONFIRM_SAMPLES,
+    ) -> None:
+        self._back_threshold_us = back_threshold_us
+        self._forward_threshold_us = forward_threshold_us
+        self._confirm_samples = confirm_samples
+        self._adopted_usec: int | None = None
+        self._candidate_usec: int | None = None
+        self._candidate_count = 0
+
+    def _clear_candidates(self) -> None:
+        self._candidate_usec = None
+        self._candidate_count = 0
+
+    def _track_candidate(self, time_usec: int) -> str:
+        if self._candidate_usec is not None and 0 < time_usec - self._candidate_usec < self._forward_threshold_us:
+            self._candidate_count += 1
+        else:
+            # First candidate, or a candidate stream that is itself not
+            # monotonic/plausible: restart confirmation from this sample.
+            self._candidate_count = 1
+        self._candidate_usec = time_usec
+        if self._candidate_count >= self._confirm_samples:
+            self._adopted_usec = time_usec
+            self._clear_candidates()
+            return "reset_send"
+        return "drop_stale"
+
+    def classify(self, time_usec: int) -> str:
+        if time_usec <= 0:
+            return "drop_invalid"
+        if self._adopted_usec is None:
+            self._adopted_usec = time_usec
+            self._clear_candidates()
+            return "send"
+        delta_usec = time_usec - self._adopted_usec
+        if 0 < delta_usec < self._forward_threshold_us:
+            self._adopted_usec = time_usec
+            self._clear_candidates()
+            return "send"
+        if -self._back_threshold_us < delta_usec <= 0:
+            # The current epoch is still alive: any pending epoch-break
+            # candidates were stragglers, not a new clock.
+            self._clear_candidates()
+            return "drop_duplicate"
+        return self._track_candidate(time_usec)
 
 
 def normalize_angle_rad(angle_rad: float) -> float:
@@ -277,6 +333,8 @@ class MavlinkExternalNavSender(Node):
         self._last_sent_yaw_monotonic = 0.0
         self._clock_reset_count = 0
         self._invalid_stamp_count = 0
+        self._stale_stamp_count = 0
+        self._epoch_gate = TimestampEpochGate()
 
         self.create_subscription(Odometry, args.odom_topic, self._handle_odom, 10)
         self._status_pub = self.create_publisher(String, args.status_topic, 10)
@@ -330,18 +388,24 @@ class MavlinkExternalNavSender(Node):
         # The header stamp is the measurement's native time base in both worlds
         # (sim time in simulation, wall clock on real hardware).
         time_usec = int(odom.header.stamp.sec) * 1000000 + int(odom.header.stamp.nanosec) // 1000
-        stamp_class = classify_time_usec(time_usec, self._last_sent_time_usec)
-        if stamp_class == "invalid":
+        stamp_class = self._epoch_gate.classify(time_usec)
+        if stamp_class == "drop_invalid":
             self._invalid_stamp_count += 1
             return
-        if stamp_class == "duplicate":
+        if stamp_class == "drop_duplicate":
             # No new odometry sample: re-sending the stale pose with a fresh
             # timestamp would feed the EKF phantom zero-velocity measurements.
             return
-        if stamp_class == "reset":
-            # The measurement clock restarted (sim relaunch, rosbag loop):
-            # drop the dedup/slew state and start a fresh epoch, otherwise the
-            # feed starves until sim time outruns the pre-reset stamp.
+        if stamp_class == "drop_stale":
+            # Regressed or implausibly-forward stamp: a delayed straggler or
+            # an unconfirmed epoch break. Never sent (R003-F12 contract).
+            self._stale_stamp_count += 1
+            return
+        if stamp_class == "reset_send":
+            # Epoch change confirmed by consecutive monotonic samples (sim
+            # relaunch, rosbag loop): atomically drop the dedup/slew state
+            # and start a fresh epoch, otherwise the feed starves until sim
+            # time outruns the pre-reset stamp.
             self._clock_reset_count += 1
             self._last_sent_time_usec = None
             self._last_limited_odom_x = None
@@ -557,6 +621,7 @@ class MavlinkExternalNavSender(Node):
             "time_usec_source": MAVLINK_TIME_SOURCE,
             "clock_reset_count": self._clock_reset_count,
             "invalid_stamp_count": self._invalid_stamp_count,
+            "stale_stamp_count": self._stale_stamp_count,
             "use_fcu_roll_pitch": self._use_fcu_roll_pitch,
             "align_yaw_to_fcu": self._align_yaw_to_fcu,
             "yaw_alignment_offset_rad": self._yaw_alignment_offset_rad,

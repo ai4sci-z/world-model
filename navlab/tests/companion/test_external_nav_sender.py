@@ -10,7 +10,7 @@ from navlab.real.companion.nodes.external_nav import (
     _yaw_from_ros_quat_enu,
     rate_limit_xy,
     rate_limit_yaw,
-    classify_time_usec,
+    TimestampEpochGate,
     ros_enu_position_to_mavlink_local_frd,
     ros_enu_yaw_to_mavlink_local_frd,
 )
@@ -92,27 +92,201 @@ def test_ros_enu_position_keeps_frame_right_handed() -> None:
     )
 
 
-def test_classify_time_usec_fresh_and_duplicate_stamps() -> None:
-    assert classify_time_usec(1_000, None) == "send"
-    assert classify_time_usec(2_000, 1_000) == "send"
-    assert classify_time_usec(1_000, 1_000) == "duplicate"
-    # Small regression (out-of-order sample) is deduped, not a clock reset.
-    assert classify_time_usec(999_000, 1_000_000) == "duplicate"
+def _drive(gate: TimestampEpochGate, stamps: list[int]) -> list[str]:
+    return [gate.classify(t) for t in stamps]
 
 
-def test_classify_time_usec_detects_clock_reset() -> None:
-    # Sim relaunch / rosbag loop: stamp jumps back >= 1s -> resync, else the
-    # sender starves until sim time outruns the pre-reset stamp.
-    assert classify_time_usec(5_000, 2_000_000) == "reset"
-    assert classify_time_usec(1_000_000, 2_000_000) == "reset"
+def test_epoch_gate_fresh_duplicate_and_small_out_of_order() -> None:
+    gate = TimestampEpochGate()
+    assert _drive(gate, [1_000_000, 1_050_000, 1_050_000, 1_049_000, 1_100_000]) == [
+        "send",
+        "send",
+        "drop_duplicate",  # same-epoch repeat
+        "drop_duplicate",  # small out-of-order (< back threshold)
+        "send",
+    ]
 
 
-def test_classify_time_usec_never_latches_on_invalid_stamps() -> None:
-    assert classify_time_usec(0, None) == "invalid"
-    assert classify_time_usec(-5, 1_000) == "invalid"
-    # A permanently-zero stamp stream stays invalid but must not poison the
-    # dedup state: the next real stamp still sends.
-    assert classify_time_usec(1_000, None) == "send"
+def test_epoch_gate_single_old_delayed_packet_never_resets_or_sends() -> None:
+    # R003-F12 counterexample: a straggler delayed by >1s must be dropped —
+    # it is NOT a new clock epoch, and it must never be sent as a pose.
+    gate = TimestampEpochGate()
+    assert _drive(gate, [10_000_000, 10_050_000, 3_000_000, 10_100_000, 10_150_000]) == [
+        "send",
+        "send",
+        "drop_stale",  # >1s-old packet: dropped, no reset
+        "send",  # current epoch resumes untouched
+        "send",
+    ]
+
+
+def test_epoch_gate_two_stragglers_still_do_not_reset() -> None:
+    # Two isolated old packets interleaved with live samples: the live
+    # samples keep clearing the candidate accumulator.
+    gate = TimestampEpochGate()
+    assert _drive(gate, [10_000_000, 3_000_000, 10_050_000, 3_100_000, 10_100_000]) == [
+        "send",
+        "drop_stale",
+        "send",
+        "drop_stale",
+        "send",
+    ]
+
+
+def test_epoch_gate_confirms_real_clock_reset_after_consecutive_samples() -> None:
+    # Sim relaunch / rosbag loop: the new epoch streams monotonically at the
+    # feed rate; the third consecutive candidate confirms the reset.
+    gate = TimestampEpochGate()
+    assert _drive(gate, [60_000_000, 60_050_000, 1_000_000, 1_050_000, 1_100_000, 1_150_000]) == [
+        "send",
+        "send",
+        "drop_stale",  # candidate 1
+        "drop_stale",  # candidate 2
+        "reset_send",  # confirmed on candidate 3
+        "send",  # new epoch is now current
+    ]
+
+
+def test_epoch_gate_drops_old_epoch_straggler_after_reset() -> None:
+    # After a confirmed reset a late packet from the PRE-reset epoch shows up
+    # as an implausible forward jump: dropped, and the live stream continues.
+    gate = TimestampEpochGate()
+    verdicts = _drive(gate, [60_000_000, 1_000_000, 1_050_000, 1_100_000, 59_900_000, 1_150_000])
+    assert verdicts == [
+        "send",
+        "drop_stale",
+        "drop_stale",
+        "reset_send",
+        "drop_stale",  # old-epoch straggler: forward jump >= threshold
+        "send",
+    ]
+
+
+def test_epoch_gate_non_monotonic_candidates_restart_confirmation() -> None:
+    # An epoch-break candidate stream that is itself not monotonic cannot
+    # confirm a reset: confirmation restarts from the offending sample.
+    gate = TimestampEpochGate()
+    assert _drive(gate, [60_000_000, 1_100_000, 1_050_000, 1_000_000]) == [
+        "send",
+        "drop_stale",
+        "drop_stale",  # regressed vs candidate: restart, count=1
+        "drop_stale",  # restart again
+    ]
+
+
+def test_epoch_gate_zero_and_negative_stamps_never_latch() -> None:
+    gate = TimestampEpochGate()
+    assert _drive(gate, [0, 0, -5]) == ["drop_invalid", "drop_invalid", "drop_invalid"]
+    # A permanently-zero stream must not poison state: first real stamp sends.
+    assert gate.classify(1_000_000) == "send"
+    # And zero stamps after adoption stay invalid without disturbing dedup.
+    assert gate.classify(0) == "drop_invalid"
+    assert gate.classify(1_050_000) == "send"
+
+
+class _RecordingMav:
+    def __init__(self) -> None:
+        self.odometry_calls: list[tuple] = []
+
+    def odometry_send(self, *args) -> None:
+        self.odometry_calls.append(args)
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.mav = _RecordingMav()
+
+
+def _odom_with(stamp_sec: int, stamp_nsec: int, x: float = 0.0) -> object:
+    stamp = SimpleNamespace(sec=stamp_sec, nanosec=stamp_nsec)
+    header = SimpleNamespace(stamp=stamp, frame_id="map")
+    position = SimpleNamespace(x=x, y=0.0, z=0.5)
+    orientation = SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
+    pose = SimpleNamespace(position=position, orientation=orientation)
+    linear = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+    angular = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+    twist = SimpleNamespace(linear=linear, angular=angular)
+    return SimpleNamespace(
+        header=header,
+        child_frame_id="base_link",
+        pose=SimpleNamespace(pose=pose, covariance=[0.0] * 36),
+        twist=SimpleNamespace(twist=twist, covariance=[0.0] * 36),
+    )
+
+
+def _sender_for_send_tick() -> MavlinkExternalNavSender:
+    sender = _sender_without_ros()
+    sender._use_fcu_roll_pitch = False
+    sender._connection = _RecordingConnection()
+    sender._last_odom = None
+    sender._last_heartbeat_monotonic = time.monotonic()
+    sender._last_odom_rx_monotonic = 0.0
+    sender._sent_count = 0
+    sender._quality = 100
+    sender._reset_counter = 0
+    sender._max_horizontal_speed_mps = 0.0
+    sender._last_sent_x = None
+    sender._last_sent_y = None
+    sender._last_sent_time_usec = None
+    sender._last_limited_odom_x = None
+    sender._last_limited_odom_y = None
+    sender._last_sent_xy_monotonic = 0.0
+    sender._clock_reset_count = 0
+    sender._invalid_stamp_count = 0
+    sender._stale_stamp_count = 0
+    sender._epoch_gate = TimestampEpochGate()
+    sender._drain_mavlink = lambda now: None
+    sender._request_fcu_attitude_if_needed = lambda now: None
+    return sender
+
+
+def test_send_tick_drops_old_packets_and_recovers_after_confirmed_reset() -> None:
+    sender = _sender_for_send_tick()
+
+    def tick(sec: int, nsec: int = 0, x: float = 0.0) -> None:
+        sender._last_odom = _odom_with(sec, nsec, x=x)
+        sender._send_tick()
+
+    tick(60, 0)
+    tick(60, 50_000_000)
+    assert len(sender._connection.mav.odometry_calls) == 2
+
+    # A delayed old packet (>1s back) must not be sent and must not reset.
+    tick(3, 0, x=99.0)
+    assert len(sender._connection.mav.odometry_calls) == 2
+    assert sender._stale_stamp_count == 1
+    assert sender._clock_reset_count == 0
+
+    # Current epoch continues.
+    tick(60, 100_000_000)
+    assert len(sender._connection.mav.odometry_calls) == 3
+
+    # Real clock reset: three consecutive new-epoch samples confirm; the
+    # confirming sample is sent and the limiter/dedup state restarts.
+    tick(1, 0)
+    tick(1, 50_000_000)
+    assert len(sender._connection.mav.odometry_calls) == 3
+    tick(1, 100_000_000)
+    assert len(sender._connection.mav.odometry_calls) == 4
+    assert sender._clock_reset_count == 1
+    assert sender._last_limited_odom_x is not None  # limiter re-primed post-reset
+
+    # New epoch flows normally afterwards.
+    tick(1, 150_000_000)
+    assert len(sender._connection.mav.odometry_calls) == 5
+
+
+def test_send_tick_zero_stamp_stream_counts_and_recovers() -> None:
+    sender = _sender_for_send_tick()
+    for _ in range(3):
+        sender._last_odom = _odom_with(0, 0)
+        sender._send_tick()
+    assert len(sender._connection.mav.odometry_calls) == 0
+    assert sender._invalid_stamp_count == 3
+
+    sender._last_odom = _odom_with(5, 0)
+    sender._send_tick()
+    assert len(sender._connection.mav.odometry_calls) == 1
 
 
 def test_odometry_quaternion_does_not_feed_fcu_roll_pitch_back_to_external_nav() -> None:
