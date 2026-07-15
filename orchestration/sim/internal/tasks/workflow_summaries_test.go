@@ -268,8 +268,64 @@ func TestBuildTaskDoctorSummaryImplementsHoverDoctor(t *testing.T) {
 	if summary.TaskSpecificDoctorClaim != "implemented" || !summary.NodeResult.OK {
 		t.Fatalf("hover task doctor = %#v", summary)
 	}
-	if summary.Checks["hover_profile_mainline"].Status != "pass" {
-		t.Fatalf("hover_profile_mainline = %#v", summary.Checks["hover_profile_mainline"])
+	if summary.Checks["hover_profile_runnable"].Status != "pass" {
+		t.Fatalf("hover_profile_runnable = %#v", summary.Checks["hover_profile_runnable"])
+	}
+}
+
+func TestHoverDoctorAllowsRegisteredDiagnosticProfilesOnly(t *testing.T) {
+	runtimeConfig := config.TaskRuntimeConfig{
+		FCUController: config.FCUControllerConfig{TakeoffAltM: 0.5, TakeoffMinHeightM: 0.15, TakeoffMinHeightRatio: 0.35},
+		SlamHover: config.SlamHoverConfig{
+			SlamOdomTopic:             "/slam/odom",
+			ExternalNavInputOdomTopic: "/slam/odom",
+			ExternalNavStatusTopic:    "/external_nav/status",
+			HoverSpanTargetM:          0.10,
+			HoverSpanHardCapM:         0.15,
+		},
+		Landing: config.LandingConfig{Enabled: true, HoverPolicy: "ap_land_mode_after_hover", MaxLandingDurationSec: 35, RequireDisarm: true, RequireMotorsSafe: true},
+	}
+	for _, tc := range []struct {
+		profile string
+		want    string
+	}{
+		{ProfileGPSEKFServices, "pass"},
+		{ProfileTruthExternalNav, "pass"},
+		{ProfileIMUFLUCorrection, "pass"},
+		{"not-a-registered-profile", "fail"},
+	} {
+		checks := hoverTaskDoctorChecks(runtimeConfig, Plan{TaskID: "hover", SimulationProfile: tc.profile})
+		if checks["hover_profile_runnable"].Status != tc.want {
+			t.Fatalf("profile %q hover_profile_runnable = %#v, want %s", tc.profile, checks["hover_profile_runnable"], tc.want)
+		}
+	}
+}
+
+func TestForbiddenInputAuditAcknowledgesDiagnosticTruthFeedArmOnly(t *testing.T) {
+	bundle := RuntimeSpecBundle{
+		Services: []simruntime.ServiceSpec{{
+			Name:    "gazebo_truth_odom",
+			Command: []string{"python3", "-m", "navlab.sim.companion.nodes.gazebo_truth_odom", "--input-topic", "/gazebo/tf", "--odom-topic", "/gazebo/truth/odom"},
+		}},
+	}
+	mainline := buildForbiddenInputAudit(bundle, false)
+	if mainline.OK || mainline.DiagnosticTruthFeedAcknowledged {
+		t.Fatalf("mainline audit must fail closed on truth tokens: %#v", mainline)
+	}
+	diagnostic := buildForbiddenInputAudit(bundle, true)
+	if !diagnostic.OK || !diagnostic.DiagnosticTruthFeedAcknowledged {
+		t.Fatalf("diagnostic truth arm audit should acknowledge matches: %#v", diagnostic)
+	}
+	if len(diagnostic.Matches) == 0 {
+		t.Fatalf("diagnostic audit must still record matches: %#v", diagnostic)
+	}
+	if !diagnosticTruthFeedAllowed(Plan{TaskID: "hover", SimulationProfile: ProfileTruthExternalNav}) {
+		t.Fatal("truth-external-nav plan should allow diagnostic truth feed")
+	}
+	for _, profile := range []string{ProfileSlamDirectNoOdomPrior, ProfileGPSEKFServices, ProfileIMUFLUCorrection} {
+		if diagnosticTruthFeedAllowed(Plan{TaskID: "hover", SimulationProfile: profile}) {
+			t.Fatalf("profile %q must not allow diagnostic truth feed", profile)
+		}
 	}
 }
 

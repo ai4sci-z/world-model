@@ -218,6 +218,10 @@ type ForbiddenInputAudit struct {
 	ScannedContexts int               `json:"scanned_contexts"`
 	Matches         []ForbiddenMatch  `json:"matches"`
 	ReviewOnly      map[string]string `json:"review_only,omitempty"`
+	// DiagnosticTruthFeedAcknowledged is set only for the GATE-4b L1.5 arm
+	// (truth-external-nav): the truth-topic matches above are that arm's
+	// declared wiring, recorded but not fatal. Never set on mainline runs.
+	DiagnosticTruthFeedAcknowledged bool `json:"diagnostic_truth_feed_acknowledged,omitempty"`
 }
 
 type ForbiddenMatch struct {
@@ -437,7 +441,7 @@ func buildSimPrepareSummary(
 	liveProbe LiveResourceProbeSummary,
 ) SimPrepareSummary {
 	resource := buildResourceProvenance(project, artifactDir, runtimeSpecs, liveProbe)
-	forbiddenAudit := buildForbiddenInputAudit(runtimeSpecs)
+	forbiddenAudit := buildForbiddenInputAudit(runtimeSpecs, diagnosticTruthFeedAllowed(plan))
 	checks := map[string]CheckResult{
 		"artifact_layout_generated":     passRequired(artifactDir != "", "artifact layout root="+artifactDir),
 		"runtime_plan_generated":        passRequired(runtimePlanPath != "", "runtime_plan="+runtimePlanPath),
@@ -729,8 +733,13 @@ func hoverTaskDoctorChecks(runtimeConfig config.TaskRuntimeConfig, plan Plan) ma
 	fcu := runtimeConfig.FCUController
 	landing := runtimeConfig.Landing
 	profile, profileOK := hoverSimulationProfileForTask(plan.TaskID, plan.SimulationProfile)
+	// Registered diagnostic profiles (GATE-4b bisection arms) may run live, but
+	// they are branded purpose=diagnostic in every summary and never count as
+	// acceptance: gate-evaluate still raises its truth/SLAM blockers for them.
+	profileRunnable := profileOK && (profile.Mainline || profile.Purpose == ProfilePurposeDiagnostic)
 	return map[string]CheckResult{
-		"hover_profile_mainline": passRequired(profileOK && profile.Mainline, "simulation_profile="+plan.SimulationProfile),
+		"hover_profile_runnable": passRequired(profileRunnable,
+			"simulation_profile="+plan.SimulationProfile+" purpose="+profile.Purpose+" mainline="+boolString(profile.Mainline)),
 		"hover_altitude_reasonable": passRequired(
 			fcu.TakeoffAltM > 0 &&
 				fcu.TakeoffMinHeightM >= 0 &&
@@ -1640,7 +1649,17 @@ func rosbagPlanEntries(specs []simruntime.RosbagSpec) []RosbagPlanEntry {
 	return entries
 }
 
-func buildForbiddenInputAudit(bundle RuntimeSpecBundle) ForbiddenInputAudit {
+// diagnosticTruthFeedAllowed reports whether plan runs the registered
+// diagnostic profile that deliberately feeds origin-normalized Gazebo truth to
+// external-nav (GATE-4b arm L1.5). Only that arm may reference truth topics in
+// its service wiring; the audit records the matches instead of failing.
+func diagnosticTruthFeedAllowed(plan Plan) bool {
+	profile, ok := hoverSimulationProfileForTask(plan.TaskID, plan.SimulationProfile)
+	return ok && !profile.Mainline && profile.Purpose == ProfilePurposeDiagnostic &&
+		profile.ExternalNavInputOdomMode == ExternalNavInputGazeboTruth
+}
+
+func buildForbiddenInputAudit(bundle RuntimeSpecBundle, diagnosticTruthFeed bool) ForbiddenInputAudit {
 	tokens := []string{
 		"/gazebo/model/odometry",
 		"/gazebo/tf",
@@ -1678,7 +1697,7 @@ func buildForbiddenInputAudit(bundle RuntimeSpecBundle) ForbiddenInputAudit {
 	for _, spec := range bundle.Rosbags {
 		scan("rosbag_output", spec.Name, []string{spec.OutputPath, spec.TopicsProfile})
 	}
-	return ForbiddenInputAudit{
+	audit := ForbiddenInputAudit{
 		OK:              len(matches) == 0,
 		Claim:           "static service/probe/rosbag command and env audit; live topic flow checked by runtime probes",
 		ForbiddenTokens: tokens,
@@ -1688,6 +1707,12 @@ func buildForbiddenInputAudit(bundle RuntimeSpecBundle) ForbiddenInputAudit {
 			"/navlab/official_maze/map": "official maze overlay may be published for review, but is not accepted as SLAM/ExternalNav/controller/gate input",
 		},
 	}
+	if diagnosticTruthFeed && len(matches) > 0 {
+		audit.OK = true
+		audit.DiagnosticTruthFeedAcknowledged = true
+		audit.Claim += "; truth-topic matches acknowledged: diagnostic truth-external-nav arm (non-acceptance run)"
+	}
+	return audit
 }
 
 func envValues(env map[string]string) []string {
