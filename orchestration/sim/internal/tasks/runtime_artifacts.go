@@ -842,6 +842,15 @@ func hoverMissionSpec(runtimeConfig config.TaskRuntimeConfig) helpers.HoverMissi
 	spec.TouchdownVerticalSpeedMPS = landing.TouchdownVerticalSpeedMPS
 	spec.RequireDisarm = landing.RequireDisarm
 	spec.RequireMotorsSafe = landing.RequireMotorsSafe
+	if runtimeConfig.FCUParamProfile == FCUParamProfileGPSBaseline {
+		// GATE-4b arm L1 (gps-ekf-services): the FCU flies the official GPS EKF
+		// and deliberately does not fuse external nav, so the mission must not
+		// gate arming on FCU external-nav readiness (it would sit in S1
+		// wait_nav_ready forever and die on preflight_timeout). Companion-side
+		// SLAM and the external-nav stream still run and are observed — that
+		// is the arm's entire point.
+		spec.RequireExternalNav = false
+	}
 	return spec
 }
 
