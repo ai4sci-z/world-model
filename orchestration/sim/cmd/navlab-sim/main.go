@@ -159,6 +159,7 @@ func newRunCommand(ctx *appContext) *cobra.Command {
 	var simulationProfile string
 	var hoverSpanTargetM float64
 	var hoverSpanHardCapM float64
+	var explorationStrategy string
 	cmd := &cobra.Command{
 		Use:   "run <task-id>",
 		Short: "Plan or run one simulation task",
@@ -174,10 +175,11 @@ func newRunCommand(ctx *appContext) *cobra.Command {
 				livePreflight,
 				ctx.artifactRoot,
 				tasks.PlanOptions{
-					DurationSec:       durationSec,
-					SimulationProfile: simulationProfile,
-					HoverSpanTargetM:  hoverSpanTargetM,
-					HoverSpanHardCapM: hoverSpanHardCapM,
+					DurationSec:         durationSec,
+					SimulationProfile:   simulationProfile,
+					HoverSpanTargetM:    hoverSpanTargetM,
+					HoverSpanHardCapM:   hoverSpanHardCapM,
+					ExplorationStrategy: explorationStrategy,
 				},
 			)
 		},
@@ -189,6 +191,7 @@ func newRunCommand(ctx *appContext) *cobra.Command {
 	cmd.Flags().StringVar(&simulationProfile, "simulation-profile", "", "override simulation profile")
 	cmd.Flags().Float64Var(&hoverSpanTargetM, "hover-span-target-m", 0, "override hover XY span SLO target in meters")
 	cmd.Flags().Float64Var(&hoverSpanHardCapM, "hover-span-hard-cap-m", 0, "override hover XY span hard cap in meters")
+	cmd.Flags().StringVar(&explorationStrategy, "exploration-strategy", "", "override exploration strategy at run time (frontier_lite|external); replaces in-place edits of the task YAML")
 	return cmd
 }
 
@@ -498,6 +501,10 @@ func buildHoverGateReplay(loader config.Loader, artifactDir string) (hoverGateRe
 	runtimeConfig, err = tasks.ApplySimulationProfile(runtimeConfig, taskPlan.Plan)
 	if err != nil {
 		return hoverGateReplayOutput{}, fmt.Errorf("apply simulation profile: %w", err)
+	}
+	runtimeConfig, err = tasks.ApplyExplorationStrategyOverride(runtimeConfig, taskPlan.Plan)
+	if err != nil {
+		return hoverGateReplayOutput{}, fmt.Errorf("apply exploration strategy override: %w", err)
 	}
 	var executionErr error
 	if summary.RuntimeError != "" {
@@ -1025,6 +1032,10 @@ func prepareTaskRun(
 	taskRuntimeConfig, err = tasks.ApplyHoverSLOPolicy(taskRuntimeConfig, plan)
 	if err != nil {
 		return preparedTaskRun{}, fmt.Errorf("failed to apply hover SLO policy for %q: %w", taskID, err)
+	}
+	taskRuntimeConfig, err = tasks.ApplyExplorationStrategyOverride(taskRuntimeConfig, plan)
+	if err != nil {
+		return preparedTaskRun{}, fmt.Errorf("failed to apply exploration strategy override for %q: %w", taskID, err)
 	}
 	plan.Execution.TaskParameters["runtime_config"] = taskRuntimeConfig
 	artifactRootPath := project.Paths.ArtifactRoot

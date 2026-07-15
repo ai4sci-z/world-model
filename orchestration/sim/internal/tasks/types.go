@@ -22,19 +22,24 @@ type PlanOptions struct {
 	SimulationProfile string
 	HoverSpanTargetM  float64
 	HoverSpanHardCapM float64
+	// ExplorationStrategy overrides the exploration task's strategy at run
+	// time (e.g. frontier_lite -> external) so harnesses never have to edit
+	// the tracked task YAML in place (Review 001 P0-3).
+	ExplorationStrategy string
 }
 
 type Plan struct {
-	TaskID            string                `json:"task_id"`
-	Description       string                `json:"description"`
-	DurationSec       float64               `json:"duration_sec"`
-	SimulationProfile string                `json:"simulation_profile"`
-	HoverSpanTargetM  float64               `json:"hover_span_target_m,omitempty"`
-	HoverSpanHardCapM float64               `json:"hover_span_hard_cap_m,omitempty"`
-	Capabilities      []string              `json:"capabilities"`
-	Steps             []string              `json:"steps"`
-	Helpers           []helpers.Definition  `json:"helpers"`
-	Execution         helpers.ExecutionPlan `json:"execution_plan"`
+	TaskID              string                `json:"task_id"`
+	Description         string                `json:"description"`
+	DurationSec         float64               `json:"duration_sec"`
+	SimulationProfile   string                `json:"simulation_profile"`
+	HoverSpanTargetM    float64               `json:"hover_span_target_m,omitempty"`
+	HoverSpanHardCapM   float64               `json:"hover_span_hard_cap_m,omitempty"`
+	ExplorationStrategy string                `json:"exploration_strategy,omitempty"`
+	Capabilities        []string              `json:"capabilities"`
+	Steps               []string              `json:"steps"`
+	Helpers             []helpers.Definition  `json:"helpers"`
+	Execution           helpers.ExecutionPlan `json:"execution_plan"`
 }
 
 func (task ConfiguredTask) Plan(options PlanOptions, helperRegistry *helpers.Registry) (Plan, error) {
@@ -58,15 +63,16 @@ func (task ConfiguredTask) Plan(options PlanOptions, helperRegistry *helpers.Reg
 		return Plan{}, err
 	}
 	return Plan{
-		TaskID:            task.Config.ID,
-		Description:       task.Config.Description,
-		DurationSec:       durationSec,
-		SimulationProfile: simulationProfile,
-		HoverSpanTargetM:  options.HoverSpanTargetM,
-		HoverSpanHardCapM: options.HoverSpanHardCapM,
-		Capabilities:      append([]string(nil), task.Config.Capabilities...),
-		Steps:             append([]string(nil), task.Definition.Steps...),
-		Helpers:           helperDefinitions,
-		Execution:         execution,
+		TaskID:              task.Config.ID,
+		Description:         task.Config.Description,
+		DurationSec:         durationSec,
+		SimulationProfile:   simulationProfile,
+		HoverSpanTargetM:    options.HoverSpanTargetM,
+		HoverSpanHardCapM:   options.HoverSpanHardCapM,
+		ExplorationStrategy: options.ExplorationStrategy,
+		Capabilities:        append([]string(nil), task.Config.Capabilities...),
+		Steps:               append([]string(nil), task.Definition.Steps...),
+		Helpers:             helperDefinitions,
+		Execution:           execution,
 	}, nil
 }
