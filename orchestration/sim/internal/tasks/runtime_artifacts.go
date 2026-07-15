@@ -17,6 +17,7 @@ import (
 
 const officialMazeSDFRelativePath = "../ardupilot_gz/ardupilot_gz_gazebo/worlds/maze.sdf"
 const officialExternalNavParamRelativePath = "docker/profiles/navlab-sitl-external-nav.parm"
+const gpsBaselineParamRelativePath = "docker/profiles/navlab-sitl-gps-baseline.parm"
 const cartographerConfigRelativePath = "navlab/common/slam/ros/localization/navlab_cartographer_adapter/config"
 
 type GeneratedRuntimeArtifact struct {
@@ -76,11 +77,11 @@ func GenerateRuntimeArtifacts(
 		if err != nil {
 			return nil, err
 		}
-		externalNavParamSource, err := officialExternalNavParamSource(project)
+		navlabParamSource, err := navlabFCUParamSource(project, runtimeConfig.FCUParamProfile)
 		if err != nil {
 			return nil, err
 		}
-		paramSource = mergeExternalNavParamProfile(paramSource, externalNavParamSource)
+		paramSource = mergeExternalNavParamProfile(paramSource, navlabParamSource)
 		paramOverlay := artifactlayout.RuntimeConfig(artifactDir, "gazebo-iris-rangefinder.parm")
 		if err := helpers.WriteParamOverlayFromSource(paramOverlay, paramSource, spec); err != nil {
 			return nil, err
@@ -115,6 +116,9 @@ func GenerateRuntimeArtifacts(
 			spec.CartographerTFTopic = helpers.DefaultSlamRuntimeSpec().CartographerTFTopic
 			spec.ExternalNavInputOdomTopic = hoverExternalNavInputOdomTopic(runtimeConfig)
 			spec.IMUSourceTopic = "/imu"
+			if runtimeConfig.SlamHover.IMUSourceCorrection == IMUSourceCorrectionRoll180FLU {
+				spec.IMUSourceTopic = helpers.IMUFLUCorrectedSourceTopic
+			}
 			spec.IMUTopic = "/navlab/slam/imu"
 			spec.PublishGlobalTF = false
 			spec.RequireIMUForQuality = true
@@ -428,18 +432,32 @@ func officialMazeSource(project config.ProjectConfig) (string, error) {
 	return string(data), nil
 }
 
-func officialExternalNavParamSource(project config.ProjectConfig) (string, error) {
+// navlabFCUParamSource returns the NavLab parameter profile merged over the
+// official gazebo-iris defaults. fcuParamProfile "" or "external-nav" selects
+// the mainline ExternalNav profile; "gps-baseline" selects the GATE-4b L1
+// diagnostic profile (rangefinder hardware only, EKF sources left official).
+func navlabFCUParamSource(project config.ProjectConfig, fcuParamProfile string) (string, error) {
+	relativePath := officialExternalNavParamRelativePath
+	fixtureTemplate := "parm/official_external_nav.parm.tmpl"
+	switch fcuParamProfile {
+	case "", "external-nav":
+	case FCUParamProfileGPSBaseline:
+		relativePath = gpsBaselineParamRelativePath
+		fixtureTemplate = "parm/navlab_gps_baseline.parm.tmpl"
+	default:
+		return "", fmt.Errorf("unknown fcu_param_profile %q", fcuParamProfile)
+	}
 	if strings.EqualFold(os.Getenv("NAVLAB_SIM_OVERLAY_SOURCE_MODE"), "fixture") || runningGoTest() {
-		return officialExternalNavParamFixture()
+		return helpers.RenderStaticHelperTemplate(fixtureTemplate)
 	}
 	workspaceRoot := project.Paths.WorkspaceRoot
 	if workspaceRoot == "" {
 		workspaceRoot = "."
 	}
-	path := filepath.Join(workspaceRoot, officialExternalNavParamRelativePath)
+	path := filepath.Join(workspaceRoot, relativePath)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read official ExternalNav SITL param profile %s: %w", path, err)
+		return "", fmt.Errorf("read NavLab SITL param profile %s: %w", path, err)
 	}
 	return string(data), nil
 }
@@ -482,10 +500,6 @@ func paramLineKey(line string) (string, bool) {
 
 func officialMazeFixture() (string, error) {
 	return helpers.RenderStaticHelperTemplate("sdf/fixtures/official_maze.sdf.tmpl")
-}
-
-func officialExternalNavParamFixture() (string, error) {
-	return helpers.RenderStaticHelperTemplate("parm/official_external_nav.parm.tmpl")
 }
 
 func runtimeContainerPath(project config.ProjectConfig, hostPath string) (string, error) {

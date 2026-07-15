@@ -10,15 +10,23 @@ import (
 )
 
 const (
-	ProfileIdeal                   = "ideal"
-	ProfileRealistic               = "realistic"
-	ProfileSlamDirect              = "slam-direct"
-	ProfileSlamDirectNoOdomPrior   = "slam-direct-no-odom-prior"
+	ProfileIdeal                 = "ideal"
+	ProfileRealistic             = "realistic"
+	ProfileSlamDirect            = "slam-direct"
+	ProfileSlamDirectNoOdomPrior = "slam-direct-no-odom-prior"
+	// GATE-4b root-cause bisection arms (names owned by the helpers package
+	// because the execution plan adds per-profile runtime services).
+	ProfileGPSEKFServices          = helpers.HoverProfileGPSEKFServices
+	ProfileTruthExternalNav        = helpers.HoverProfileTruthExternalNav
+	ProfileIMUFLUCorrection        = helpers.HoverProfileIMUFLUCorrection
 	ProfilePurposeLegacyDebug      = "legacy-debug"
 	ProfilePurposeDiagnostic       = "diagnostic"
 	ProfilePurposeMainline         = "mainline"
 	ExternalNavInputDefault        = "default-selector-candidate"
 	ExternalNavInputDirectSlamOdom = "direct-slam-odom"
+	ExternalNavInputGazeboTruth    = "gazebo-truth-odom"
+	FCUParamProfileGPSBaseline     = "gps-baseline"
+	IMUSourceCorrectionRoll180FLU  = "roll180_flu"
 )
 
 type HoverSimulationProfile struct {
@@ -27,6 +35,8 @@ type HoverSimulationProfile struct {
 	AllowTasks                 []string
 	ExternalNavInputOdomMode   string
 	CartographerConfigBasename string
+	FCUParamProfile            string
+	IMUSourceCorrection        string
 	Mainline                   bool
 }
 
@@ -53,6 +63,33 @@ func HoverSimulationProfiles() []HoverSimulationProfile {
 			ExternalNavInputOdomMode:   ExternalNavInputDirectSlamOdom,
 			CartographerConfigBasename: helpers.HoverNoOdomPriorConfigBasename,
 			Mainline:                   true,
+		},
+		// GATE-4b arm L1: full service stack, FCU flies the official GPS EKF.
+		{
+			Name:                       ProfileGPSEKFServices,
+			Purpose:                    ProfilePurposeDiagnostic,
+			AllowTasks:                 []string{"hover"},
+			ExternalNavInputOdomMode:   ExternalNavInputDirectSlamOdom,
+			CartographerConfigBasename: helpers.HoverNoOdomPriorConfigBasename,
+			FCUParamProfile:            FCUParamProfileGPSBaseline,
+		},
+		// GATE-4b arm L1.5: identical feed mechanism, truth content.
+		{
+			Name:                       ProfileTruthExternalNav,
+			Purpose:                    ProfilePurposeDiagnostic,
+			AllowTasks:                 []string{"hover"},
+			ExternalNavInputOdomMode:   ExternalNavInputGazeboTruth,
+			CartographerConfigBasename: helpers.HoverNoOdomPriorConfigBasename,
+		},
+		// GATE-4b arm L2-fix: mainline feed, IMU mount convention corrected
+		// before Cartographer.
+		{
+			Name:                       ProfileIMUFLUCorrection,
+			Purpose:                    ProfilePurposeDiagnostic,
+			AllowTasks:                 []string{"hover", "hover-slam-only"},
+			ExternalNavInputOdomMode:   ExternalNavInputDirectSlamOdom,
+			CartographerConfigBasename: helpers.HoverNoOdomPriorConfigBasename,
+			IMUSourceCorrection:        IMUSourceCorrectionRoll180FLU,
 		},
 	}
 	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Name < profiles[j].Name })
@@ -83,9 +120,18 @@ func applyHoverSimulationProfile(runtimeConfig config.TaskRuntimeConfig, profile
 	switch profile.ExternalNavInputOdomMode {
 	case ExternalNavInputDirectSlamOdom:
 		runtimeConfig.SlamHover.ExternalNavInputOdomTopic = runtimeConfig.SlamHover.SlamOdomTopic
+	case ExternalNavInputGazeboTruth:
+		runtimeConfig.SlamHover.ExternalNavInputOdomTopic = helpers.GazeboTruthOdomTopic
+		runtimeConfig.SlamHover.UsesGazeboTruthAsInput = true
 	}
 	if profile.CartographerConfigBasename != "" {
 		runtimeConfig.SlamBackend.CartographerConfigurationBasename = profile.CartographerConfigBasename
+	}
+	if profile.FCUParamProfile != "" {
+		runtimeConfig.FCUParamProfile = profile.FCUParamProfile
+	}
+	if profile.IMUSourceCorrection != "" {
+		runtimeConfig.SlamHover.IMUSourceCorrection = profile.IMUSourceCorrection
 	}
 	return runtimeConfig
 }

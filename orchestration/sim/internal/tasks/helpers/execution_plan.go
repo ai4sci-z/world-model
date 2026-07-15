@@ -9,6 +9,23 @@ import (
 	"navlab/orchestration-sim/internal/config"
 )
 
+// GATE-4b hover diagnostic simulation profiles. Defined here (not in the
+// tasks package) because the execution plan must add per-profile runtime
+// services and the tasks package already imports helpers.
+const (
+	// HoverProfileGPSEKFServices (arm L1): full SLAM/companion service stack,
+	// FCU flies the official GPS+compass EKF and does not fuse external nav.
+	HoverProfileGPSEKFServices = "gps-ekf-services"
+	// HoverProfileTruthExternalNav (arm L1.5): external-nav feed content is
+	// origin-normalized Gazebo truth instead of Cartographer output; the feed
+	// mechanism, rates, and every service stay identical to mainline.
+	HoverProfileTruthExternalNav = "truth-external-nav"
+	// HoverProfileIMUFLUCorrection (arm L2-fix): mainline stack, but the IMU
+	// stream feeding SLAM has the official model's roll-180 sensor mount
+	// removed before Cartographer consumes it.
+	HoverProfileIMUFLUCorrection = "imu-flu-correction"
+)
+
 type ExecutionPlan struct {
 	Status             string                 `json:"status"`
 	TaskID             string                 `json:"task_id"`
@@ -144,8 +161,46 @@ func BuildExecutionPlan(
 	if plan.TaskID == "hover" {
 		moveRuntimeServiceBefore(&plan, "external_nav_source_selector", "slam_backend")
 	}
+	if helperSet["slam"] && simulationProfile == HoverProfileTruthExternalNav {
+		addGazeboTruthOdomExecution(&plan)
+		moveRuntimeServiceBefore(&plan, "gazebo_truth_odom", "slam_backend")
+	}
+	if helperSet["slam"] && simulationProfile == HoverProfileIMUFLUCorrection {
+		addIMUFrameCorrectorExecution(&plan)
+		moveRuntimeServiceBefore(&plan, "imu_frame_corrector", "slam_backend")
+	}
 	applyArtifactLayout(&plan)
 	return plan, nil
+}
+
+func addGazeboTruthOdomExecution(plan *ExecutionPlan) {
+	plan.RuntimeServices = append(plan.RuntimeServices, RuntimeServicePlan{
+		HelperID:      "slam",
+		ServiceName:   "gazebo_truth_odom",
+		ContainerName: "navlab-gazebo-truth-odom",
+		ImageRef:      "images.runtime",
+		Network:       "host",
+		Command: []string{"bash", "-lc",
+			"source /opt/ros/${ROS_DISTRO:-humble}/setup.bash && source ${OFFICIAL_WS:-/opt/navlab_official_ws}/install/setup.bash && exec python3 -m navlab.sim.companion.nodes.gazebo_truth_odom --input-topic /gazebo/tf --odom-topic " + GazeboTruthOdomTopic + " --status-topic /gazebo/truth/status --frame-id map --child-frame-id base_link > artifacts/runtime/logs/gazebo_truth_odom.runtime.log 2>&1"},
+		Env:        BaselineROSEnv(),
+		SideEffect: true,
+		Status:     "diagnostic_truth_feed_arm",
+	})
+}
+
+func addIMUFrameCorrectorExecution(plan *ExecutionPlan) {
+	plan.RuntimeServices = append(plan.RuntimeServices, RuntimeServicePlan{
+		HelperID:      "slam",
+		ServiceName:   "imu_frame_corrector",
+		ContainerName: "navlab-imu-frame-corrector",
+		ImageRef:      "images.runtime",
+		Network:       "host",
+		Command: []string{"bash", "-lc",
+			"source /opt/ros/${ROS_DISTRO:-humble}/setup.bash && source ${OFFICIAL_WS:-/opt/navlab_official_ws}/install/setup.bash && exec python3 -m navlab.sim.companion.nodes.imu_frame_corrector --input-topic /imu --output-topic " + IMUFLUCorrectedSourceTopic + " --status-topic " + IMUFLUCorrectedSourceTopic + "/status --correction roll180_flu > artifacts/runtime/logs/imu_frame_corrector.runtime.log 2>&1"},
+		Env:        BaselineROSEnv(),
+		SideEffect: true,
+		Status:     "diagnostic_imu_convention_arm",
+	})
 }
 
 func applyArtifactLayout(plan *ExecutionPlan) {

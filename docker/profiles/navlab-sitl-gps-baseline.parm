@@ -1,0 +1,39 @@
+# NavLab SITL GPS-baseline profile (GATE-4b diagnostic arm L1).
+#
+# Keeps the NavLab FCU-facing rangefinder hardware profile identical to the
+# ExternalNav stack, but leaves every EKF source, GPS, and compass parameter
+# at the official gazebo-iris defaults (GPS + compass EKF3). Pairing this
+# profile with the full SLAM/companion service stack isolates "service
+# co-residency / DDS load" from "external-nav feed content": the external-nav
+# MAVLink stream keeps flowing, the FCU simply does not fuse it
+# (VISO_TYPE stays 0, EK3_SRC1_* stay at GPS defaults).
+#
+# Intentionally ABSENT vs navlab-sitl-external-nav.parm:
+#   AHRS_EKF_TYPE, ARMING_CHECK, EK3_GPS_CHECK, EK3_SRC_OPTIONS, GPS1_TYPE,
+#   SIM_GPS*_ENABLE/TYPE, VISO_TYPE, EK3_SRC1_*, SCR_ENABLE, AHRS_ORIG_*,
+#   COMPASS_USE*
+FRAME_CLASS	1
+FRAME_TYPE	1
+
+# NavLab keeps the down-facing rangefinder profile aligned to the real machine
+# (same block as navlab-sitl-external-nav.parm).
+SERIAL7_BAUD 115
+SERIAL7_OPTIONS 0
+SERIAL7_PROTOCOL 9
+EK3_RNG_USE_HGT -1
+RNGFND1_ADDR 0
+RNGFND1_FUNCTION 0
+RNGFND1_OFFSET 0
+RNGFND1_PIN -1
+RNGFND1_PWRRNG 0
+RNGFND1_RMETRIC 1
+RNGFND1_SCALING 3
+RNGFND1_STOP_PIN -1
+RNGFND1_TYPE 20
+RNGFND1_MIN 0.05
+RNGFND1_MAX 12
+RNGFND1_GNDCLR 0.15
+RNGFND1_ORIENT 25
+RNGFND1_POS_X 0
+RNGFND1_POS_Y 0
+RNGFND1_POS_Z 0

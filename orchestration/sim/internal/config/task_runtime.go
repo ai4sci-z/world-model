@@ -27,6 +27,11 @@ type TaskRuntimeConfig struct {
 	AirframeDisturbanceGate AirframeDisturbanceGateConfig `json:"airframe_disturbance_gate"`
 	Landing                 LandingConfig                 `json:"landing"`
 	ScanRobustness          ScanRobustnessTaskConfig      `json:"scan_robustness"`
+	// FCUParamProfile selects the NavLab parameter profile merged over the
+	// official gazebo-iris defaults: "" / "external-nav" (mainline) or
+	// "gps-baseline" (GATE-4b diagnostic arm L1). Set by simulation
+	// profiles, not by config.toml.
+	FCUParamProfile string `json:"fcu_param_profile,omitempty"`
 }
 
 type ScanRobustnessTaskConfig struct {

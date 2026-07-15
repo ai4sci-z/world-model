@@ -21,6 +21,12 @@ const (
 	HoverCartographerConfigBasename      = "navlab_cartographer_2d_hover.lua"
 	HoverNoOdomPriorConfigBasename       = "navlab_cartographer_2d_hover_no_odom_prior.lua"
 	OfficialCartographerConfigDir        = "/opt/navlab_ws/install/navlab_cartographer_adapter/share/navlab_cartographer_adapter/config"
+	// GATE-4b diagnostic-arm wiring. GazeboTruthOdomTopic is published by
+	// navlab.sim.companion.nodes.gazebo_truth_odom (origin-normalized truth,
+	// map/base_link frames); IMUFLUCorrectedSourceTopic is published by
+	// navlab.sim.companion.nodes.imu_frame_corrector (roll-180 mount removed).
+	GazeboTruthOdomTopic       = "/gazebo/truth/odom"
+	IMUFLUCorrectedSourceTopic = "/navlab/slam/imu_source_flu"
 )
 
 type SlamRuntimeSpec struct {

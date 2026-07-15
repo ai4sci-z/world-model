@@ -76,7 +76,14 @@ func TestApplySimulationProfileDoesNotChangeOtherTasks(t *testing.T) {
 
 func TestHoverSimulationProfileRegistryListsMainlineProfile(t *testing.T) {
 	allowed := AllowedProfilesForTask("hover")
-	want := []string{ProfileIdeal, ProfileSlamDirect, ProfileSlamDirectNoOdomPrior}
+	want := []string{
+		ProfileGPSEKFServices,
+		ProfileIdeal,
+		ProfileIMUFLUCorrection,
+		ProfileSlamDirect,
+		ProfileSlamDirectNoOdomPrior,
+		ProfileTruthExternalNav,
+	}
 	if strings.Join(allowed, ",") != strings.Join(want, ",") {
 		t.Fatalf("allowed hover profiles = %#v, want %#v", allowed, want)
 	}

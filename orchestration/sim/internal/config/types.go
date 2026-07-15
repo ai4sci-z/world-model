@@ -366,8 +366,13 @@ type SlamHoverConfig struct {
 	MinFCULocalPositionRateHz    float64                      `mapstructure:"min_fcu_local_position_rate_hz"`
 	MaxLatestAgeSec              float64                      `mapstructure:"max_latest_age_sec"`
 	UsesGazeboTruthAsInput       bool                         `mapstructure:"uses_gazebo_truth_as_input"`
-	HoverClaim                   string                       `mapstructure:"hover_claim"`
-	ExplorationClaim             string                       `mapstructure:"exploration_claim"`
+	// IMUSourceCorrection selects a mounting-convention correction applied to
+	// the IMU stream before SLAM consumes it: "" (mainline, raw bridge
+	// stream) or "roll180_flu" (GATE-4b diagnostic arm, removes the official
+	// iris model's roll-180 IMU sensor mount).
+	IMUSourceCorrection string `mapstructure:"imu_source_correction"`
+	HoverClaim          string `mapstructure:"hover_claim"`
+	ExplorationClaim    string `mapstructure:"exploration_claim"`
 }
 
 type StartupReadinessPolicyConfig struct {
