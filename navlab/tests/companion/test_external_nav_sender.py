@@ -5,6 +5,7 @@ import time
 from types import SimpleNamespace
 
 from navlab.common.pose import quaternion_from_yaw
+from navlab.real.companion.nodes import external_nav as external_nav_module
 from navlab.real.companion.nodes.external_nav import (
     MavlinkExternalNavSender,
     _yaw_from_ros_quat_enu,
@@ -14,6 +15,21 @@ from navlab.real.companion.nodes.external_nav import (
     ros_enu_position_to_mavlink_local_frd,
     ros_enu_yaw_to_mavlink_local_frd,
 )
+
+# OPEN-2 (R003-A14): these node-level tests must not depend on pymavlink
+# being installed. Without it the module falls back to mavlink=None and the
+# send path crashes on constant lookup — an environment artifact, not the
+# behavior under test. Inject the MAVLink spec constants
+# (MAV_FRAME_LOCAL_FRD=20, MAV_FRAME_BODY_FRD=12, MAV_ESTIMATOR_TYPE_VIO=3)
+# only in that case; with pymavlink present this is a no-op. Deliberately not
+# a pytest fixture: the companion container has pymavlink but no pytest, and
+# the tests must stay runnable there too.
+if external_nav_module.mavlink is None:
+    external_nav_module.mavlink = SimpleNamespace(
+        MAV_FRAME_LOCAL_FRD=20,
+        MAV_FRAME_BODY_FRD=12,
+        MAV_ESTIMATOR_TYPE_VIO=3,
+    )
 
 
 def _pose_with_yaw(yaw_rad: float) -> SimpleNamespace:
@@ -238,6 +254,38 @@ def _sender_for_send_tick() -> MavlinkExternalNavSender:
     sender._drain_mavlink = lambda now: None
     sender._request_fcu_attitude_if_needed = lambda now: None
     return sender
+
+
+def test_epoch_gate_node_restart_mid_stream_adopts_current_epoch() -> None:
+    # WP305 node-restart counterexample: a sender restart builds a fresh gate
+    # while the source keeps streaming its (large, nonzero) epoch. The first
+    # live sample must be adopted immediately — a restart must not stall the
+    # feed behind epoch confirmation.
+    gate = TimestampEpochGate()
+    assert gate.classify(3_600_000_000) == "send"
+    assert gate.classify(3_600_050_000) == "send"
+    # And stragglers afterwards are still dropped, never a reset: within
+    # EPOCH_BREAK_BACK_US they are dedup traffic, beyond it they are
+    # unconfirmed epoch-break candidates.
+    assert gate.classify(3_599_600_000) == "drop_duplicate"
+    assert gate.classify(3_598_000_000) == "drop_stale"
+
+
+def test_epoch_gate_source_dropout_forward_jump_needs_confirmation() -> None:
+    # WP305 source-lifecycle counterexample: the source dies and comes back
+    # much later on the same clock (long dropout => forward jump beyond the
+    # epoch-break threshold). The jump is an epoch-break candidate, not a
+    # send; the stream re-latches only after consecutive confirmation.
+    gate = TimestampEpochGate()
+    assert gate.classify(60_000_000) == "send"
+    resumed = 60_000_000 + external_nav_module.EPOCH_BREAK_FORWARD_US + 10_000_000
+    verdicts = []
+    for i in range(external_nav_module.EPOCH_CONFIRM_SAMPLES):
+        verdicts.append(gate.classify(resumed + (i * 50_000)))
+    assert verdicts[-1] == "reset_send"
+    assert all(v == "drop_stale" for v in verdicts[:-1])
+    # After adoption the resumed stream is normal traffic again.
+    assert gate.classify(resumed + (external_nav_module.EPOCH_CONFIRM_SAMPLES * 50_000)) == "send"
 
 
 def test_send_tick_drops_old_packets_and_recovers_after_confirmed_reset() -> None:
