@@ -111,6 +111,14 @@ func GenerateRuntimeArtifacts(
 	}
 	if hasHelper(plan, "slam") {
 		spec := slamSpec(runtimeConfig)
+		// B22 debt closure: every task whose Cartographer consumes the
+		// official-baseline /imu gets the corrected FLU stream (the hover
+		// family was converted first; exploration/navigation had been left
+		// reading the raw roll-180 stream).
+		if helpers.CorrectedIMUConsumerTask(plan.TaskID) &&
+			runtimeConfig.SlamHover.IMUSourceCorrection == IMUSourceCorrectionRoll180FLU {
+			spec.IMUSourceTopic = helpers.IMUFLUCorrectedSourceTopic
+		}
 		if isHoverSlamRuntimeTask(plan.TaskID) {
 			spec.CartographerConfigurationBasename = hoverCartographerConfigBasename(runtimeConfig)
 			spec.CartographerTFTopic = helpers.DefaultSlamRuntimeSpec().CartographerTFTopic

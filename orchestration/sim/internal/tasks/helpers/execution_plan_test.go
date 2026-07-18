@@ -221,6 +221,60 @@ func TestBuildExecutionPlanExplorationKeepsMatureSLAMRosbagTopics(t *testing.T) 
 	assertRosbagRequiredMissingTopics(t, plan, "exploration_rosbag", []string{"/navlab/x2/scan_normalized"})
 }
 
+// B22 debt closure: every task whose Cartographer consumes the official /imu
+// must run the roll-180 FLU corrector, ordered before slam_backend — not just
+// the hover family.
+func TestBuildExecutionPlanCorrectedIMUTasksRunFrameCorrector(t *testing.T) {
+	for _, taskID := range []string{"exploration", "navigation"} {
+		task := config.TaskConfig{
+			ID:     taskID,
+			Family: "sim",
+			Task: config.TaskParameters{
+				DurationSec:       120,
+				SimulationProfile: "ideal",
+			},
+		}
+		definitions, err := DefaultRegistry().Resolve([]string{"sensors", "slam", "fcu-controller"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := BuildExecutionPlan(task, 120, "ideal", definitions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		correctorIdx, slamIdx := -1, -1
+		for idx, service := range plan.RuntimeServices {
+			if service.ServiceName == "imu_frame_corrector" {
+				correctorIdx = idx
+			}
+			if service.ServiceName == "slam_backend" {
+				slamIdx = idx
+			}
+		}
+		if correctorIdx < 0 {
+			t.Fatalf("%s: imu_frame_corrector missing (B22 debt: cartographer reads raw /imu)", taskID)
+		}
+		if slamIdx >= 0 && correctorIdx > slamIdx {
+			t.Fatalf("%s: imu_frame_corrector must start before slam_backend", taskID)
+		}
+	}
+}
+
+func TestCorrectedIMUConsumerTask(t *testing.T) {
+	for taskID, want := range map[string]bool{
+		"hover":           true,
+		"hover-slam-only": true,
+		"exploration":     true,
+		"navigation":      true,
+		"scan-robustness": false,
+		"unknown":         false,
+	} {
+		if got := CorrectedIMUConsumerTask(taskID); got != want {
+			t.Fatalf("CorrectedIMUConsumerTask(%q) = %v, want %v", taskID, got, want)
+		}
+	}
+}
+
 func TestTaskRequiredTopicsExcludeDiagnosticTruthInputs(t *testing.T) {
 	banned := []string{
 		"/odometry",

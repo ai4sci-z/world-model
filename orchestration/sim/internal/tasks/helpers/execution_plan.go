@@ -165,12 +165,14 @@ func BuildExecutionPlan(
 		addGazeboTruthOdomExecution(&plan)
 		moveRuntimeServiceBefore(&plan, "gazebo_truth_odom", "slam_backend")
 	}
-	if helperSet["slam"] && (plan.TaskID == "hover" || plan.TaskID == "hover-slam-only") {
+	if helperSet["slam"] && CorrectedIMUConsumerTask(plan.TaskID) {
 		// Mainline since the GATE-4b root-cause campaign: the runtime spec
 		// points Cartographer at the corrected IMU stream by default
-		// (SlamHover.IMUSourceCorrection), so every hover-family run needs
-		// the corrector service; the imu-flu-correction profile name is
-		// kept as an alias of mainline behavior.
+		// (SlamHover.IMUSourceCorrection), so every run whose Cartographer
+		// consumes the official-baseline /imu needs the corrector service;
+		// the imu-flu-correction profile name is kept as an alias of
+		// mainline behavior. B22 debt closure: exploration/navigation were
+		// left on the raw /imu when only the hover family was converted.
 		addIMUFrameCorrectorExecution(&plan)
 		moveRuntimeServiceBefore(&plan, "imu_frame_corrector", "slam_backend")
 	}
@@ -191,6 +193,19 @@ func addGazeboTruthOdomExecution(plan *ExecutionPlan) {
 		SideEffect: true,
 		Status:     "diagnostic_truth_feed_arm",
 	})
+}
+
+// CorrectedIMUConsumerTask reports whether a task's Cartographer consumes the
+// official-baseline gazebo /imu and therefore needs the roll-180 FLU frame
+// corrector (B22: the iris IMU is mounted roll-180; feeding the raw stream
+// flips the SLAM heading by 180 deg).
+func CorrectedIMUConsumerTask(taskID string) bool {
+	switch taskID {
+	case "hover", "hover-slam-only", "exploration", "navigation":
+		return true
+	default:
+		return false
+	}
 }
 
 func addIMUFrameCorrectorExecution(plan *ExecutionPlan) {

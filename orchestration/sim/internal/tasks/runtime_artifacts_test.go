@@ -185,6 +185,64 @@ func TestGenerateRuntimeArtifactsFromConfiguredTasks(t *testing.T) {
 	}
 }
 
+// B22 debt closure: exploration/navigation Cartographer must consume the
+// mount-corrected IMU stream, not the raw roll-180 /imu (only the hover
+// family had been converted).
+func TestGenerateRuntimeArtifactsExplorationNavigationUseCorrectedIMU(t *testing.T) {
+	t.Setenv("NAVLAB_SIM_OVERLAY_SOURCE_MODE", "fixture")
+	loader := config.NewLoader("../../config.toml")
+	project, err := loader.LoadProject()
+	if err != nil {
+		t.Fatalf("LoadProject() error = %v", err)
+	}
+	for _, taskID := range []string{"exploration", "navigation"} {
+		t.Run(taskID, func(t *testing.T) {
+			taskConfig, err := loader.LoadTask(project, taskID)
+			if err != nil {
+				t.Fatalf("LoadTask(%q) error = %v", taskID, err)
+			}
+			runtimeConfig, err := config.BuildTaskRuntimeConfig(project, taskConfig)
+			if err != nil {
+				t.Fatalf("BuildTaskRuntimeConfig(%q) error = %v", taskID, err)
+			}
+			task, err := DefaultRegistry().ConfigureOne(taskConfig)
+			if err != nil {
+				t.Fatalf("ConfigureOne(%q) error = %v", taskID, err)
+			}
+			plan, err := task.Plan(PlanOptions{}, helpers.DefaultRegistry())
+			if err != nil {
+				t.Fatalf("Plan(%q) error = %v", taskID, err)
+			}
+			runtimeConfig, err = ApplySimulationProfile(runtimeConfig, plan)
+			if err != nil {
+				t.Fatalf("ApplySimulationProfile(%q) error = %v", taskID, err)
+			}
+			artifactDir := t.TempDir()
+			if _, err := GenerateRuntimeArtifacts(project, plan, runtimeConfig, artifactDir); err != nil {
+				t.Fatalf("GenerateRuntimeArtifacts(%q) error = %v", taskID, err)
+			}
+			slamRuntimePath := artifactlayout.RuntimeConfig(artifactDir, "slam_runtime.toml")
+			data, err := os.ReadFile(slamRuntimePath)
+			if err != nil {
+				t.Fatalf("read slam runtime config: %v", err)
+			}
+			want := "imu_source_topic = '" + helpers.IMUFLUCorrectedSourceTopic + "'"
+			if !strings.Contains(string(data), want) {
+				t.Fatalf("%s slam runtime must consume corrected IMU (B22), missing %q:\n%s", taskID, want, string(data))
+			}
+			corrector := false
+			for _, service := range plan.Execution.RuntimeServices {
+				if service.ServiceName == "imu_frame_corrector" {
+					corrector = true
+				}
+			}
+			if !corrector {
+				t.Fatalf("%s plan missing imu_frame_corrector service", taskID)
+			}
+		})
+	}
+}
+
 func TestGenerateRuntimeArtifactsKeepsHoverRootReadable(t *testing.T) {
 	t.Setenv("NAVLAB_SIM_OVERLAY_SOURCE_MODE", "fixture")
 	loader := config.NewLoader("../../config.toml")
