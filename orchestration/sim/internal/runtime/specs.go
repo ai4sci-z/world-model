@@ -10,19 +10,23 @@ import (
 )
 
 type ServiceSpec struct {
-	Name           string
-	Command        []string
-	Image          string
-	ContainerName  string
-	Env            map[string]string
-	CWD            string
-	Volumes        []VolumeMount
-	Networks       []string
-	User           string
-	Detach         bool
-	Remove         bool
-	Required       bool
-	Restartable    bool
+	Name          string
+	Command       []string
+	Image         string
+	ContainerName string
+	Env           map[string]string
+	CWD           string
+	Volumes       []VolumeMount
+	Networks      []string
+	User          string
+	Detach        bool
+	Remove        bool
+	Required      bool
+	Restartable   bool
+	// WaitForExit marks a finite mission service: after the required probes
+	// pass, the runner waits (bounded by the task deadline) for it to exit
+	// on its own instead of tearing it down mid-flight.
+	WaitForExit    bool
 	LogPath        string
 	ServiceRole    string
 	StopSignal     string

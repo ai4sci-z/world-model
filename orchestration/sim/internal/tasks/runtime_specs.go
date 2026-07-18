@@ -107,6 +107,7 @@ func BuildRuntimeSpecs(project config.ProjectConfig, plan helpers.ExecutionPlan,
 			Detach:        true,
 			Required:      true,
 			Restartable:   startupReadinessRestartableService(service.ServiceName),
+			WaitForExit:   missionService(service.ServiceName),
 			LogPath:       artifactlayout.RuntimeLog(artifactDir, service.ServiceName+".start.log"),
 			ServiceRole:   service.HelperID,
 		}
@@ -415,6 +416,15 @@ func runtimeRosDistro(project config.ProjectConfig) string {
 		return distro
 	}
 	return "humble"
+}
+
+// missionService reports whether a runtime service is a finite mission
+// (a script that flies the task and exits on its own). The runner must not
+// tear these down right after the probes finish — that SIGKILLs the mission
+// mid-flight (GATE-4b) — it waits for their own exit, bounded by the task
+// deadline.
+func missionService(name string) bool {
+	return strings.HasSuffix(name, "_mission")
 }
 
 func usesOfficialBaseline(plan helpers.ExecutionPlan) bool {

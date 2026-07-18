@@ -811,3 +811,16 @@ func TestBuildRuntimeSpecsRejectsMissingImage(t *testing.T) {
 		t.Fatal("BuildRuntimeSpecs error = nil, want missing image error")
 	}
 }
+
+func TestMissionServiceMarking(t *testing.T) {
+	for name, want := range map[string]bool{
+		"hover_mission":                true,
+		"navigation_mission":           true,
+		"slam_backend":                 false,
+		"external_nav_source_selector": false,
+	} {
+		if got := missionService(name); got != want {
+			t.Fatalf("missionService(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

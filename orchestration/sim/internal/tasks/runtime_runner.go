@@ -208,6 +208,20 @@ func ExecuteRuntimeSpecs(
 		return result, err
 	}
 
+	// GATE-4b: the probes finishing does not mean the mission finished.
+	// Wait (bounded by the task deadline) for mission-class services to exit
+	// on their own before tearing anything down — otherwise cleanup()
+	// SIGKILLs the mission mid-flight.
+	if err := waitForMissionServices(backend, bundle, &result, options, deadline); err != nil {
+		if errors.Is(err, errTaskRuntimeTimeout) {
+			return timeout("mission_wait")
+		}
+		captureRuntimeHandleLogs(backend, result.ServiceHandles, "mission wait failure")
+		cleanup()
+		emitRuntimeEvent(options, RuntimeEvent{Phase: "run.failed", Level: "error", Message: err.Error()})
+		return result, err
+	}
+
 	if options.WaitForRosbags {
 		if options.RosbagPostTaskGraceSec > 0 {
 			waitPostTaskRosbagGrace(result.RosbagHandles, options)
@@ -569,6 +583,71 @@ func writeStartupReadinessMissionSummary(artifactDir string, decision StartupRea
 
 func roundSeconds(value float64) float64 {
 	return float64(int(value*1000)) / 1000
+}
+
+// waitForMissionServices blocks until every WaitForExit service has exited on
+// its own. The wait is bounded by the task deadline (errTaskRuntimeTimeout on
+// expiry); with no deadline configured it waits like waitForRosbags does. A
+// non-zero mission exit code is recorded as an event only — the mission verdict
+// belongs to mission_summary.json, not to the runner.
+func waitForMissionServices(
+	backend simruntime.Backend,
+	bundle RuntimeSpecBundle,
+	result *RuntimeExecutionResult,
+	options RuntimeExecutionOptions,
+	deadline runtimeDeadline,
+) error {
+	waitNames := map[string]bool{}
+	for _, spec := range bundle.Services {
+		if spec.WaitForExit {
+			waitNames[spec.Name] = true
+		}
+	}
+	if len(waitNames) == 0 {
+		return nil
+	}
+	type waitOutcome struct {
+		code int
+		err  error
+	}
+	for _, handle := range result.ServiceHandles {
+		if !waitNames[handle.ServiceName] {
+			continue
+		}
+		emitRuntimeEvent(options, componentEvent("mission.waiting", "service", handle.ServiceName, handle.LogPath, "waiting for mission service to exit"))
+		done := make(chan waitOutcome, 1)
+		go func(h simruntime.RuntimeHandle) {
+			code, err := backend.Wait(h)
+			done <- waitOutcome{code: code, err: err}
+		}(handle)
+		var outcome waitOutcome
+		if deadline.enabled {
+			remaining := time.Until(deadline.at)
+			if remaining <= 0 {
+				return errTaskRuntimeTimeout
+			}
+			select {
+			case outcome = <-done:
+			case <-time.After(remaining):
+				return errTaskRuntimeTimeout
+			}
+		} else {
+			outcome = <-done
+		}
+		if outcome.err != nil {
+			captureRuntimeLogs(backend, handle, "mission wait error")
+			emitRuntimeEvent(options, componentEvent("mission.failed", "service", handle.ServiceName, handle.LogPath, outcome.err.Error()))
+			return fmt.Errorf("wait mission %s: %w", handle.ServiceName, outcome.err)
+		}
+		event := componentEvent("mission.finished", "service", handle.ServiceName, handle.LogPath, "mission service exited")
+		event.Payload = map[string]any{"return_code": outcome.code}
+		if outcome.code != 0 {
+			event.Level = "warn"
+			captureRuntimeLogs(backend, handle, "mission return code "+fmt.Sprint(outcome.code))
+		}
+		emitRuntimeEvent(options, event)
+	}
+	return nil
 }
 
 func waitForRosbags(backend simruntime.Backend, handles []simruntime.RuntimeHandle, options RuntimeExecutionOptions) error {

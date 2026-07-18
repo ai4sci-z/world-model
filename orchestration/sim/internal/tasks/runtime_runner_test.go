@@ -23,6 +23,7 @@ type fakeRuntimeBackend struct {
 	probeDelays      map[string]time.Duration
 	waitReturnCodes  map[string]int
 	waitErrors       map[string]error
+	waitDelays       map[string]time.Duration
 	stopErrors       map[string]error
 	serviceStartTime time.Time
 }
@@ -83,6 +84,9 @@ func (backend *fakeRuntimeBackend) RunProbe(spec simruntime.ProbeSpec) (simrunti
 
 func (backend *fakeRuntimeBackend) Wait(handle simruntime.RuntimeHandle) (int, error) {
 	backend.events = append(backend.events, "wait:"+handle.ServiceName)
+	if delay := backend.waitDelays[handle.ServiceName]; delay > 0 {
+		time.Sleep(delay)
+	}
 	return backend.waitReturnCodes[handle.ServiceName], backend.waitErrors[handle.ServiceName]
 }
 
@@ -557,6 +561,77 @@ func TestExecuteRuntimeSpecsCleansUpAfterServiceStartFailure(t *testing.T) {
 	})
 }
 
+func TestExecuteRuntimeSpecsWaitsForMissionServiceBeforeCleanup(t *testing.T) {
+	backend := newFakeRuntimeBackend()
+	_, err := ExecuteRuntimeSpecs(backend, RuntimeSpecBundle{
+		Services: []simruntime.ServiceSpec{
+			{Name: "gazebo"},
+			{Name: "hover_mission", WaitForExit: true},
+		},
+		Probes: []simruntime.ProbeSpec{
+			{Name: "frame_probe", Required: true},
+		},
+	}, RuntimeExecutionOptions{})
+	if err != nil {
+		t.Fatalf("ExecuteRuntimeSpecs() error = %v", err)
+	}
+	waitIdx, stopIdx := -1, -1
+	for idx, event := range backend.events {
+		if event == "wait:hover_mission" && waitIdx < 0 {
+			waitIdx = idx
+		}
+		if event == "stop:hover_mission" && stopIdx < 0 {
+			stopIdx = idx
+		}
+	}
+	if waitIdx < 0 {
+		t.Fatalf("runner must wait for the mission to exit on its own (GATE-4b), events = %v", backend.events)
+	}
+	if stopIdx >= 0 && stopIdx < waitIdx {
+		t.Fatalf("mission stopped before its own exit (SIGKILL mid-flight), events = %v", backend.events)
+	}
+}
+
+func TestExecuteRuntimeSpecsMissionWaitHitsTaskDeadline(t *testing.T) {
+	backend := newFakeRuntimeBackend()
+	backend.waitDelays["hover_mission"] = 500 * time.Millisecond
+	artifactDir := t.TempDir()
+	_, err := ExecuteRuntimeSpecs(backend, RuntimeSpecBundle{
+		Services: []simruntime.ServiceSpec{
+			{Name: "hover_mission", WaitForExit: true},
+		},
+		Probes: []simruntime.ProbeSpec{
+			{Name: "frame_probe", Required: true},
+		},
+	}, RuntimeExecutionOptions{TaskDeadlineSec: 0.1, ArtifactDir: artifactDir})
+	if err == nil || !strings.Contains(err.Error(), "task_runtime_timeout") {
+		t.Fatalf("mission overrunning the deadline must be a task timeout, err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "mission_wait") {
+		t.Fatalf("timeout stage must name mission_wait, err = %v", err)
+	}
+	summaryPath := filepath.Join(artifactDir, "mission_summary.json")
+	if _, statErr := os.Stat(summaryPath); statErr != nil {
+		t.Fatalf("timeout path must write mission_summary.json: %v", statErr)
+	}
+}
+
+func TestExecuteRuntimeSpecsMissionNonZeroExitIsNotARunnerError(t *testing.T) {
+	backend := newFakeRuntimeBackend()
+	backend.waitReturnCodes["hover_mission"] = 3
+	_, err := ExecuteRuntimeSpecs(backend, RuntimeSpecBundle{
+		Services: []simruntime.ServiceSpec{
+			{Name: "hover_mission", WaitForExit: true},
+		},
+		Probes: []simruntime.ProbeSpec{
+			{Name: "frame_probe", Required: true},
+		},
+	}, RuntimeExecutionOptions{})
+	if err != nil {
+		t.Fatalf("mission verdict belongs to mission_summary, not the runner: %v", err)
+	}
+}
+
 func newFakeRuntimeBackend() *fakeRuntimeBackend {
 	return &fakeRuntimeBackend{
 		probeResults:     map[string]simruntime.ProbeResult{},
@@ -565,6 +640,7 @@ func newFakeRuntimeBackend() *fakeRuntimeBackend {
 		probeDelays:      map[string]time.Duration{},
 		waitReturnCodes:  map[string]int{},
 		waitErrors:       map[string]error{},
+		waitDelays:       map[string]time.Duration{},
 		stopErrors:       map[string]error{},
 		serviceStartTime: time.Date(2026, 6, 12, 1, 2, 3, 0, time.UTC),
 	}
