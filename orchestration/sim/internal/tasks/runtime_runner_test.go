@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -26,6 +27,7 @@ type fakeRuntimeBackend struct {
 	waitDelays       map[string]time.Duration
 	stopErrors       map[string]error
 	serviceStartTime time.Time
+	probeHook        func(name string)
 }
 
 type captureEventSink struct {
@@ -47,11 +49,13 @@ func (backend *fakeRuntimeBackend) StartService(spec simruntime.ServiceSpec) (si
 		return simruntime.RuntimeHandle{}, errors.New("boom")
 	}
 	return simruntime.RuntimeHandle{
-		Backend:     "fake",
-		ServiceName: spec.Name,
-		Identifier:  spec.Name,
-		StartedAt:   backend.serviceStartTime,
-		LogPath:     spec.LogPath,
+		Backend:       "fake",
+		ServiceName:   spec.Name,
+		Identifier:    spec.Name,
+		ContainerID:   "fake-id-" + spec.Name,
+		ContainerName: spec.ContainerName,
+		StartedAt:     backend.serviceStartTime,
+		LogPath:       spec.LogPath,
 	}, nil
 }
 
@@ -68,6 +72,9 @@ func (backend *fakeRuntimeBackend) StartRosbag(spec simruntime.RosbagSpec) (simr
 
 func (backend *fakeRuntimeBackend) RunProbe(spec simruntime.ProbeSpec) (simruntime.ProbeResult, error) {
 	backend.events = append(backend.events, "probe:"+spec.Name)
+	if backend.probeHook != nil {
+		backend.probeHook(spec.Name)
+	}
 	if delay := backend.probeDelays[spec.Name]; delay > 0 {
 		time.Sleep(delay)
 	}
@@ -692,4 +699,71 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// WP304 AA-PF-02 upstream contract: every service start must atomically publish
+// the runtime handles (incl. the real container ID) into
+// <artifact>/runtime/service_handles.json so a read-only sidecar can bind the
+// official-baseline container identity DURING the run, not after finalize.
+func TestExecuteRuntimeSpecsPublishesServiceHandlesArtifactDuringRun(t *testing.T) {
+	backend := newFakeRuntimeBackend()
+	artifactDir := t.TempDir()
+	seen := struct {
+		handlesAtProbeTime []byte
+	}{}
+	backend.probeResults = map[string]simruntime.ProbeResult{}
+	backend.probeHook = func(name string) {
+		data, err := os.ReadFile(filepath.Join(artifactDir, "runtime", "service_handles.json"))
+		if err == nil {
+			seen.handlesAtProbeTime = data
+		}
+	}
+	_, err := ExecuteRuntimeSpecs(backend, RuntimeSpecBundle{
+		Services: []simruntime.ServiceSpec{
+			{Name: "official_baseline", ContainerName: "navlab-official-baseline"},
+			{Name: "slam"},
+		},
+		Probes: []simruntime.ProbeSpec{{Name: "frame_probe", Required: true}},
+	}, RuntimeExecutionOptions{ArtifactDir: artifactDir, RunID: "20260715T204428.255001623Z"})
+	if err != nil {
+		t.Fatalf("ExecuteRuntimeSpecs() error = %v", err)
+	}
+	if len(seen.handlesAtProbeTime) == 0 {
+		t.Fatalf("service_handles.json must exist DURING the run (readable at probe time)")
+	}
+	var doc struct {
+		SchemaVersion string                     `json:"schema_version"`
+		RunID         string                     `json:"run_id"`
+		Handles       []simruntime.RuntimeHandle `json:"handles"`
+	}
+	if err := json.Unmarshal(seen.handlesAtProbeTime, &doc); err != nil {
+		t.Fatalf("service_handles.json not parseable: %v", err)
+	}
+	if doc.SchemaVersion != "navlab.runtime.service_handles.v1" {
+		t.Fatalf("schema_version = %q", doc.SchemaVersion)
+	}
+	if doc.RunID != "20260715T204428.255001623Z" {
+		t.Fatalf("run_id = %q (must bind the run)", doc.RunID)
+	}
+	var official *simruntime.RuntimeHandle
+	for i := range doc.Handles {
+		if doc.Handles[i].ServiceName == "official_baseline" {
+			official = &doc.Handles[i]
+		}
+	}
+	if official == nil {
+		t.Fatalf("official_baseline handle missing: %+v", doc.Handles)
+	}
+	if official.ContainerName != "navlab-official-baseline" {
+		t.Fatalf("container_name = %q", official.ContainerName)
+	}
+	if official.ContainerID == "" {
+		t.Fatalf("container_id must carry the real create ID, got empty")
+	}
+	entries, _ := os.ReadDir(filepath.Join(artifactDir, "runtime"))
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Fatalf("atomic write must not leave tmp: %s", e.Name())
+		}
+	}
 }

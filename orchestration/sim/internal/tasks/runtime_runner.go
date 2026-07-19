@@ -113,6 +113,7 @@ func ExecuteRuntimeSpecs(
 			return result, fmt.Errorf("start service %s: %w", spec.Name, err)
 		}
 		result.ServiceHandles = append(result.ServiceHandles, handle)
+		publishServiceHandles(options, result.ServiceHandles)
 		emitRuntimeEvent(options, componentEvent("service.started", "service", spec.Name, handle.LogPath, "service started"))
 	}
 	if deadline.expired() {
@@ -140,6 +141,7 @@ func ExecuteRuntimeSpecs(
 			return result, fmt.Errorf("start service %s: %w", spec.Name, err)
 		}
 		result.ServiceHandles = append(result.ServiceHandles, handle)
+		publishServiceHandles(options, result.ServiceHandles)
 		emitRuntimeEvent(options, componentEvent("service.started", "service", spec.Name, handle.LogPath, "service started"))
 	}
 	for _, spec := range bundle.Rosbags {
@@ -583,6 +585,50 @@ func writeStartupReadinessMissionSummary(artifactDir string, decision StartupRea
 
 func roundSeconds(value float64) float64 {
 	return float64(int(value*1000)) / 1000
+}
+
+// publishServiceHandles atomically writes the runtime handles known so far into
+// <artifact>/runtime/service_handles.json (WP304 AA-PF-02 contract). A read-only
+// telemetry sidecar binds the official-baseline container identity from this
+// artifact DURING the run; summary.json only carries handles after finalize.
+// Write failures must never fail the task: they are reported as runtime events.
+func publishServiceHandles(options RuntimeExecutionOptions, handles []simruntime.RuntimeHandle) {
+	if strings.TrimSpace(options.ArtifactDir) == "" {
+		return
+	}
+	dir := filepath.Join(options.ArtifactDir, "runtime")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		emitRuntimeEvent(options, RuntimeEvent{Phase: "run.service_handles_warning", Level: "warn",
+			Message: "service_handles mkdir: " + err.Error()})
+		return
+	}
+	doc := map[string]any{
+		"schema_version": "navlab.runtime.service_handles.v1",
+		"run_id":         options.RunID,
+		"handles":        handles,
+	}
+	payload, err := json.MarshalIndent(doc, "", " ")
+	if err != nil {
+		emitRuntimeEvent(options, RuntimeEvent{Phase: "run.service_handles_warning", Level: "warn",
+			Message: "service_handles marshal: " + err.Error()})
+		return
+	}
+	target := filepath.Join(dir, "service_handles.json")
+	tmp := target + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o644); err == nil {
+		if f, ferr := os.Open(tmp); ferr == nil {
+			_ = f.Sync()
+			_ = f.Close()
+		}
+		if err := os.Rename(tmp, target); err != nil {
+			_ = os.Remove(tmp)
+			emitRuntimeEvent(options, RuntimeEvent{Phase: "run.service_handles_warning", Level: "warn",
+				Message: "service_handles rename: " + err.Error()})
+		}
+	} else {
+		emitRuntimeEvent(options, RuntimeEvent{Phase: "run.service_handles_warning", Level: "warn",
+			Message: "service_handles write: " + err.Error()})
+	}
 }
 
 // waitForMissionServices blocks until every WaitForExit service has exited on

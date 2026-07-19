@@ -76,6 +76,7 @@ type RuntimeHandle struct {
 	Backend             string    `json:"backend"`
 	ServiceName         string    `json:"service_name"`
 	Identifier          string    `json:"identifier"`
+	ContainerID         string    `json:"container_id,omitempty"`
 	Command             []string  `json:"command"`
 	StartedAt           time.Time `json:"started_at"`
 	LogPath             string    `json:"log_path,omitempty"`

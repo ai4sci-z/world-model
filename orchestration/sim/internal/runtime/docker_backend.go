@@ -129,6 +129,7 @@ func (backend DockerBackend) StartService(spec ServiceSpec) (RuntimeHandle, erro
 		return RuntimeHandle{}, fmt.Errorf("docker sdk create service %s failed: %w", spec.Name, err)
 	}
 	identifier := identifier(spec.ContainerName, created.ID)
+	containerID := created.ID
 	if err := backend.client().ContainerStart(context.Background(), identifier, dockercontainer.StartOptions{}); err != nil {
 		_ = writeLog(spec.LogPath, "", err.Error())
 		_ = backend.client().ContainerRemove(context.Background(), identifier, dockercontainer.RemoveOptions{Force: true, RemoveVolumes: true})
@@ -138,6 +139,7 @@ func (backend DockerBackend) StartService(spec ServiceSpec) (RuntimeHandle, erro
 		Backend:        dockerSDKBackendName,
 		ServiceName:    spec.Name,
 		Identifier:     identifier,
+		ContainerID:    containerID,
 		Command:        append([]string(nil), spec.Command...),
 		StartedAt:      backend.now(),
 		LogPath:        spec.LogPath,
