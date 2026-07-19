@@ -613,13 +613,12 @@ func publishServiceHandles(options RuntimeExecutionOptions, handles []simruntime
 			Message: "service_handles marshal: " + err.Error()})
 		return
 	}
+	// 轻量原子发布:tmp+rename(同文件系统 rename 原子性保证消费者不见半文件)。
+	// 刻意不 fsync:该产物为观测性 warn-only 语义,崩溃丢失可接受;
+	// 强 fsync 的毫秒级开销曾打爆 5ms 级任务死线测试。
 	target := filepath.Join(dir, "service_handles.json")
 	tmp := target + ".tmp"
 	if err := os.WriteFile(tmp, payload, 0o644); err == nil {
-		if f, ferr := os.Open(tmp); ferr == nil {
-			_ = f.Sync()
-			_ = f.Close()
-		}
 		if err := os.Rename(tmp, target); err != nil {
 			_ = os.Remove(tmp)
 			emitRuntimeEvent(options, RuntimeEvent{Phase: "run.service_handles_warning", Level: "warn",
