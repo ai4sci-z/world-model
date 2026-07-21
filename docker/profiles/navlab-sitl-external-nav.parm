@@ -57,3 +57,8 @@ RNGFND1_POS_Z 0
 COMPASS_USE 0
 COMPASS_USE2 0
 COMPASS_USE3 0
+
+# AA003 observation-only (owner ruling B1, 2026-07-22): persist dataflash while
+# disarmed so never-armed bring-up failures leave BIN evidence (OPEN-1 no-BIN class).
+# Not a control-logic change.
+LOG_DISARMED 1
