@@ -504,7 +504,7 @@ func mavlinkExternalNavSenderServiceSpec(
 		"--use-fcu-roll-pitch",
 		"--no-align-yaw-to-fcu",
 		"--local-position-pose-topic /navlab/fcu/local_position_pose",
-		"--max-local-position-age-ms 1000",
+		"--max-local-position-age-ms 4000",
 		"--max-horizontal-speed-mps 0.25",
 		"--max-yaw-rate-radps 0.6",
 		"> " + shellQuote(containerArtifactDir+"/"+artifactlayout.RuntimeLogRel("mavlink_external_nav.runtime.log")) + " 2>&1",
