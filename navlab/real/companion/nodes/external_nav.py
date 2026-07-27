@@ -323,6 +323,14 @@ class MavlinkExternalNavSender(Node):
         self._yaw_alignment_offset_rad: float | None = None
         self._local_position_count = 0
         self._last_local_position_monotonic = 0.0
+        # OPEN-1 fix: judge local_position freshness in the FCU's own sim-clock
+        # domain (MAVLink time_boot_ms), not host wall-clock. Under RTF<1 / host
+        # load the FCU's LOCAL_POSITION stream is throttled in wall time but its
+        # time_boot_ms advances at sim rate, so a wall-clock age check spuriously
+        # goes stale and flaps readiness. _fcu_boot_ms_latest tracks FCU sim-now
+        # from any timestamped FCU message (ATTITUDE flows continuously).
+        self._fcu_boot_ms_latest = 0
+        self._last_local_position_boot_ms = 0
         self._last_sent_x: float | None = None
         self._last_sent_y: float | None = None
         self._last_sent_time_usec: int | None = None
@@ -478,9 +486,16 @@ class MavlinkExternalNavSender(Node):
                 self._fcu_rollspeed_radps = float(msg.rollspeed)
                 self._fcu_pitchspeed_radps = float(msg.pitchspeed)
                 self._last_fcu_attitude_monotonic = now_monotonic
+                self._fcu_boot_ms_latest = max(
+                    self._fcu_boot_ms_latest, int(getattr(msg, "time_boot_ms", 0))
+                )
             elif msg_type == "LOCAL_POSITION_NED":
                 self._local_position_count += 1
                 self._last_local_position_monotonic = now_monotonic
+                self._last_local_position_boot_ms = int(getattr(msg, "time_boot_ms", 0))
+                self._fcu_boot_ms_latest = max(
+                    self._fcu_boot_ms_latest, self._last_local_position_boot_ms
+                )
                 self._publish_local_position_pose(msg)
 
     def _request_fcu_attitude_if_needed(self, now_monotonic: float) -> None:
@@ -586,7 +601,13 @@ class MavlinkExternalNavSender(Node):
         if self._last_fcu_attitude_monotonic > 0.0:
             attitude_age_ms = (time.monotonic() - self._last_fcu_attitude_monotonic) * 1000.0
         local_position_age_ms = -1.0
-        if self._last_local_position_monotonic > 0.0:
+        if self._last_local_position_boot_ms > 0 and self._fcu_boot_ms_latest > 0:
+            # FCU sim-clock age (RTF/host-load independent). time_boot_ms is ms.
+            local_position_age_ms = float(
+                self._fcu_boot_ms_latest - self._last_local_position_boot_ms
+            )
+        elif self._last_local_position_monotonic > 0.0:
+            # Fallback (no FCU time_boot_ms seen yet): host wall-clock age.
             local_position_age_ms = (time.monotonic() - self._last_local_position_monotonic) * 1000.0
 
         odom_fresh = self._last_odom is not None and 0.0 <= age_ms <= self._max_odom_age_ms
