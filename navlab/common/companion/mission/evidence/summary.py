@@ -217,9 +217,15 @@ def build_landing_summary(
     if started:
         if not touchdown_confirmed:
             blockers.append("touchdown_not_confirmed")
-        if require_disarm and not disarmed:
+        # R3-H(2026-07-27 实证):若配置了触地后强制上锁(force_disarm_after_touchdown)但尚未触发
+        # (force_disarm_used=False)且尚未上锁,则上锁仍在进行中(宽限期内)——这是瞬态,不是失败。
+        # 避免探针(slam_hover_probe)抢在 force_disarm 宽限期内单帧快照时误报 disarm_not_confirmed/
+        # motors_not_safe。守卫:一旦 force-disarm 已给过机会(force_disarm_used=True)或本就不靠
+        # force-disarm(force_disarm_after_touchdown=False)却仍未上锁,则照常判失败(不掩盖真失败)。
+        disarm_resolution_pending = force_disarm_after_touchdown and not force_disarm_used and not disarmed
+        if require_disarm and not disarmed and not disarm_resolution_pending:
             blockers.append("disarm_not_confirmed")
-        if require_motors_safe and not motors_safe:
+        if require_motors_safe and not motors_safe and not disarm_resolution_pending:
             blockers.append("motors_not_safe")
         if landing_policy_uses_ap_land_mode(policy) and not landing_handoff_confirmed(
             landing_policy=policy,
