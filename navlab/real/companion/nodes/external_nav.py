@@ -35,6 +35,8 @@ MAVLINK_POSITION_FRAME = "MAV_FRAME_LOCAL_FRD"
 MAVLINK_VELOCITY_FRAME = "MAV_FRAME_BODY_FRD"
 MAVLINK_ESTIMATOR_TYPE = "MAV_ESTIMATOR_TYPE_VIO"
 ROS_ODOM_SEMANTICS = "ROS ENU position with FLU body twist"
+# OPEN-1 流请求风暴门控:两流均新鲜(墙钟)则不重发 SET_MESSAGE_INTERVAL;超此阈值视为陈旧可重发
+STREAM_REREQUEST_STALE_SEC = 5.0
 
 
 def _upper_triangular_covariance(covariance: Sequence[float]) -> list[float]:
@@ -504,6 +506,22 @@ class MavlinkExternalNavSender(Node):
         if self._target_system is None or self._target_component is None:
             return
         if now_monotonic < self._next_stream_request_monotonic:
+            return
+        # OPEN-1 单变量实验(2026-07-28):此前无条件每 2s 重发 SET_MESSAGE_INTERVAL=
+        # 流请求风暴,是 FCU 周期遥测空洞(心跳 gap 实测 2.1~284.6s;洞盖 arm 段→armed
+        # 不可见→S3 死循环;洞盖 preflight→LP 缺)的上游嫌疑。改为:两条流都新鲜时不再
+        # 重发;bring-up(从未见流)与流变陈旧(>STREAM_REREQUEST_STALE_SEC)时照常请求,
+        # 保留启动鲁棒性与空洞后自恢复。
+        attitude_fresh = (
+            self._last_fcu_attitude_monotonic > 0.0
+            and now_monotonic - self._last_fcu_attitude_monotonic < STREAM_REREQUEST_STALE_SEC
+        )
+        local_position_fresh = (
+            self._last_local_position_monotonic > 0.0
+            and now_monotonic - self._last_local_position_monotonic < STREAM_REREQUEST_STALE_SEC
+        )
+        if attitude_fresh and local_position_fresh:
+            self._next_stream_request_monotonic = now_monotonic + 2.0
             return
         for message_id, hz in (
             (mavlink.MAVLINK_MSG_ID_HEARTBEAT, 2.0),
