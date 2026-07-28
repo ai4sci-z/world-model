@@ -311,26 +311,6 @@ def main() -> int:
             takeoff_ack_accepted = False
             takeoff_deadline = time.monotonic() + max(18.0, float(SPEC.get("readiness_timeout_sec", 45.0)) * 0.75)
             while time.monotonic() < takeoff_deadline:
-                # R3-G(2026-07-28 实证):若在 takeoff 循环里被 DISARM_DELAY auto-disarm(arm 后未起飞
-                # 自动上锁),NAV_TAKEOFF 会因"未 armed"被拒,循环空转到超时(run5 死循环直接因)。
-                # 发 takeoff 前补一次 arm,恢复 arm+takeoff 时序耦合的鲁棒性。不掩盖真失败:仍需
-                # 后续 takeoff_height.ok 才算 takeoff_ok。
-                if not wait_mavlink_armed(master, timeout_sec=0.3):
-                    master.mav.command_long_send(
-                        master.target_system,
-                        master.target_component,
-                        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-                        0,
-                        1,
-                        21196 if bool(SPEC.get("force_arm", False)) else 0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                    )
-                    wait_mavlink_ack(master, mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, timeout_sec=2.0)
-                    wait_mavlink_armed(master, timeout_sec=2.0)
                 master.set_mode(int(mode_id))
                 guided_before_takeoff = wait_mavlink_guided(master, int(mode_id), timeout_sec=3.0)
                 collect_mavlink_statustext(master, timeout_sec=0.1)
