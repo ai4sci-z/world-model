@@ -891,6 +891,9 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		`setpoint_lookahead_sec`,
 		`z_m_raw = payload.get("z_m")`,
 		`if z_up_m is not None and 0.05 < z_up_m < 100.0:`,
+		`state["mavlink_yaw_rad"] = float(msg.yaw)`,
+		`world_vx = vx_mps * cos_y - vy_mps * sin_y`,
+		`world_vy = vx_mps * sin_y + vy_mps * cos_y`,
 		`z_ned_m = -min(3.0, max(0.3, z_up_m))`,
 	} {
 		if !strings.Contains(text, expected) {

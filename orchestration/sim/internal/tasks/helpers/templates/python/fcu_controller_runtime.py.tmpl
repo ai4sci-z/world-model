@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 
@@ -448,9 +449,13 @@ def main() -> int:
 
     def refresh_mavlink_local_position(master) -> None:
         for _ in range(8):
-            msg = master.recv_match(type="LOCAL_POSITION_NED", blocking=False)
+            msg = master.recv_match(type=["LOCAL_POSITION_NED", "ATTITUDE"], blocking=False)
             if msg is None:
                 return
+            if msg.get_type() == "ATTITUDE":
+                # M5 帧闭环:采 FCU 自身 NED yaw,用于机体系 intent → LOCAL_NED 旋转
+                state["mavlink_yaw_rad"] = float(msg.yaw)
+                continue
             data = msg.to_dict()
             state["mavlink_local_x_m"] = float(data.get("x", 0.0) or 0.0)
             state["mavlink_local_y_m"] = float(data.get("y", 0.0) or 0.0)
@@ -478,8 +483,22 @@ def main() -> int:
         current_y = state.get("mavlink_local_y_m")
         base_x = float(current_x) if current_x is not None else float(state.get("local_setpoint_x_m", 0.0) or 0.0)
         base_y = float(current_y) if current_y is not None else float(state.get("local_setpoint_y_m", 0.0) or 0.0)
-        state["local_setpoint_x_m"] = base_x + vx_mps * lookahead_sec
-        state["local_setpoint_y_m"] = base_y + vy_mps * lookahead_sec
+        # M5 帧闭环(2026-07-28 bag 实测):intent 契约语义=机体系(FRD,x前 y右;
+        # 参考实现 frontier_lite 即"前进+转弯";当前全部生产者 y≈0)。此前本函数把
+        # (vx,vy) 当世界 NED 直接积分,而 cmd_vel 路径又按机体系下发——yaw≈180° 时
+        # 两路指令方向相反互相打架,净运动≈漂移,任何规划都无法执行(16 样本角差
+        # 散布全圆实测)。修:用 FCU 自身 ATTITUDE yaw(NED)把机体系旋到 LOCAL_NED
+        # 再积分;yaw 未知时保持旧行为(向后安全)。
+        yaw_ned = state.get("mavlink_yaw_rad")
+        if yaw_ned is not None:
+            cos_y = math.cos(float(yaw_ned))
+            sin_y = math.sin(float(yaw_ned))
+            world_vx = vx_mps * cos_y - vy_mps * sin_y
+            world_vy = vx_mps * sin_y + vy_mps * cos_y
+        else:
+            world_vx, world_vy = vx_mps, vy_mps
+        state["local_setpoint_x_m"] = base_x + world_vx * lookahead_sec
+        state["local_setpoint_y_m"] = base_y + world_vy * lookahead_sec
         state["local_setpoint_yaw_rad"] = float(state.get("local_setpoint_yaw_rad", 0.0) or 0.0) + yaw_rate_radps * dt
         state["last_local_setpoint_monotonic"] = now
         # M5 z闭环(控制器侧):真 GBPlanner 的 3D 路径在规划高度做过碰撞检查,
