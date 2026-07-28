@@ -482,7 +482,22 @@ def main() -> int:
         state["local_setpoint_y_m"] = base_y + vy_mps * lookahead_sec
         state["local_setpoint_yaw_rad"] = float(state.get("local_setpoint_yaw_rad", 0.0) or 0.0) + yaw_rate_radps * dt
         state["last_local_setpoint_monotonic"] = now
+        # M5 z闭环(控制器侧):真 GBPlanner 的 3D 路径在规划高度做过碰撞检查,
+        # 但 setpoint intent 契约此前无 z 通道,z_ned_m 被写死为 -takeoff_alt_m
+        # (0.5m),碰撞检查通过的路径被钉在贴地高度执行导致蹭墙
+        # (2026-07-28 M5 run m5_20260728T181620 实测,Gazebo 目击)。
+        # 契约扩展(向后兼容):intent 可选字段 "z_m" = 期望绝对高度
+        # (米,向上为正,local 系);字段缺失或非法时维持原行为。
         z_ned_m = -float(SPEC.get("takeoff_alt_m", 0.5) or 0.5)
+        z_m_raw = payload.get("z_m")
+        if z_m_raw is not None:
+            try:
+                z_up_m = float(z_m_raw)
+            except (TypeError, ValueError):
+                z_up_m = None
+            # NaN 与任何数比较均为 False,天然被 sanity 比较链排除,无需 math。
+            if z_up_m is not None and 0.05 < z_up_m < 100.0:
+                z_ned_m = -min(3.0, max(0.3, z_up_m))
         target_system = int(state.get("mavlink_target_system", 0) or getattr(master, "target_system", 0) or 0)
         target_component = int(state.get("mavlink_target_component", 0) or getattr(master, "target_component", 0) or 0)
         try:

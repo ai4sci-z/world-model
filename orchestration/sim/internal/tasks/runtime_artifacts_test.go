@@ -889,6 +889,9 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		`mavlink_setpoint_count`,
 		`refresh_mavlink_local_position(master)`,
 		`setpoint_lookahead_sec`,
+		`z_m_raw = payload.get("z_m")`,
+		`if z_up_m is not None and 0.05 < z_up_m < 100.0:`,
+		`z_ned_m = -min(3.0, max(0.3, z_up_m))`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("fcu controller script missing %q:\n%s", expected, text)
