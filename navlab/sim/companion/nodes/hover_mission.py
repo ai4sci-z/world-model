@@ -138,6 +138,28 @@ def _operator_confirm_value(payload: str) -> bool | None:
     return None
 
 
+# OPEN-1 流请求风暴门控(2026-07-28,与 external_nav.STREAM_REREQUEST_STALE_SEC 同语义):
+# 实证 run5 一 run 内 SET_MESSAGE_INTERVAL ×3114(本节点 9 消息×每2s=86%),命令/ACK 风暴挤压
+# FCU TX→周期消息(心跳/LP)空洞 2~285s→洞盖 arm 段则 armed 不可见→S3 死循环。
+# 语义:2s 节流窗口内不请求;从未见周期流(bring-up)照常请求;周期流新鲜(<stale_sec)不再
+# 重发;真变陈旧(>=stale_sec)重发以自恢复。
+STREAM_REREQUEST_STALE_SEC = 5.0
+
+
+def should_rerequest_streams(
+    now_monotonic: float,
+    next_request_monotonic: float,
+    last_periodic_stream_monotonic: float,
+    stale_sec: float = STREAM_REREQUEST_STALE_SEC,
+) -> bool:
+    """Return whether the periodic-stream SET_MESSAGE_INTERVAL burst should be re-sent now."""
+    if now_monotonic < next_request_monotonic:
+        return False
+    if last_periodic_stream_monotonic <= 0.0:
+        return True
+    return now_monotonic - last_periodic_stream_monotonic >= stale_sec
+
+
 def _request_hover_streams(connection, target_system: int, target_component: int) -> None:
     from pymavlink.dialects.v20 import ardupilotmega as mavlink
 
@@ -453,6 +475,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 )
             )
             self._next_request = 0.0
+            self._last_periodic_stream_monotonic = 0.0
             self._next_heartbeat = 0.0
             self._next_origin_command = 0.0
             self._mission_phase = MissionPhaseRecorder(started_at_monotonic=self._started)
@@ -643,7 +666,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             if (
                 self._runtime.target_system is not None
                 and self._runtime.target_component is not None
-                and now >= self._next_request
+                and should_rerequest_streams(now, self._next_request, self._last_periodic_stream_monotonic)
             ):
                 _request_hover_streams(self._connection, self._runtime.target_system, self._runtime.target_component)
                 if args.disable_arming_checks:
@@ -967,6 +990,8 @@ def run(argv: Sequence[str] | None = None) -> int:
                     min_airborne_alt_m=args.min_airborne_alt_m,
                 )
                 self._runtime.apply_update(update, now_monotonic=now)
+                if update.msg_type == "LOCAL_POSITION_NED" or update.current_custom_mode is not None:
+                    self._last_periodic_stream_monotonic = now
                 apply_bounded_mavlink_collections(self._mavlink_collections, update)
                 if update.mode_after_land is not None and self._landing_evidence.mode_after_land is None:
                     self._landing_evidence.mark_mode_after_land(update.mode_after_land)
