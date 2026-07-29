@@ -461,7 +461,9 @@ def main() -> int:
         cmd.twist.linear.y = float(payload.get("linear_y_mps", 0.0) or 0.0)
         cmd.twist.linear.z = 0.0
         cmd.twist.angular.z = float(payload.get("yaw_rate_radps", 0.0) or 0.0)
-        cmd_vel_pub.publish(cmd)
+        # 双重控制修复(2026-07-29):停发 DDS 速度指令,统一走 MAVLink 位置目标单通道
+        # cmd_vel_pub.publish(cmd)
+        state["cmd_vel_publish_count"] = int(state.get("cmd_vel_publish_count", 0) or 0)  # 保留计数字段(应恒为0)
         state["cmd_vel_publish_count"] += 1
 
     def refresh_mavlink_local_position(master) -> None:
@@ -594,7 +596,9 @@ def main() -> int:
         cmd = TwistStamped()
         cmd.header.stamp = node.get_clock().now().to_msg()
         cmd.header.frame_id = SPEC.get("base_frame_id", "base_link")
-        cmd_vel_pub.publish(cmd)
+        # 双重控制修复(2026-07-29):停发 DDS 速度指令,统一走 MAVLink 位置目标单通道
+        # cmd_vel_pub.publish(cmd)
+        state["cmd_vel_publish_count"] = int(state.get("cmd_vel_publish_count", 0) or 0)  # 保留计数字段(应恒为0)
         state["cmd_vel_publish_count"] += 1
         send_mavlink_local_position_setpoint({"linear_x_mps": 0.0, "linear_y_mps": 0.0, "yaw_rate_radps": 0.0})
 
