@@ -894,7 +894,8 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		`state["mavlink_yaw_rad"] = float(msg.yaw)`,
 		`world_vx = vx_mps * cos_y - vy_mps * sin_y`,
 		`if not state.get("local_setpoint_yaw_initialized"):`,
-		`state["local_setpoint_yaw_rad"] = float(yaw_now) if yaw_now is not None else 0.0`,
+		`state["mavlink_setpoint_error"] = "yaw_unknown_setpoint_skipped"`,
+		`state["local_setpoint_yaw_rad"] = float(yaw_now)`,
 		`world_vy = vx_mps * sin_y + vy_mps * cos_y`,
 		`z_ned_m = -min(3.0, max(0.3, z_up_m))`,
 	} {
