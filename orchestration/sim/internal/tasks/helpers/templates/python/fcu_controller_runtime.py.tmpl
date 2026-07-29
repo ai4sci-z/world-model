@@ -55,6 +55,7 @@ def main() -> int:
         "local_setpoint_y_m": 0.0,
         "local_setpoint_yaw_rad": 0.0,
         "local_setpoint_yaw_initialized": False,
+        "setpoint_anchor_initialized": False,
         "last_local_setpoint_monotonic": 0.0,
         "bootstrap_status": {"ok": False, "state": "not_started"},
         "task_completed": False,
@@ -507,8 +508,26 @@ def main() -> int:
             world_vy = vx_mps * sin_y + vy_mps * cos_y
         else:
             world_vx, world_vy = vx_mps, vy_mps
-        state["local_setpoint_x_m"] = base_x + world_vx * lookahead_sec
-        state["local_setpoint_y_m"] = base_y + world_vy * lookahead_sec
+        # 位置目标合成(2026-07-29 实测修正):原式 = 实测位置 + v×前瞻,每拍都基于实时位置
+        # 重设目标 → 误差恒为 v×前瞻、飞控持续加速;飞机冲过头后目标又跟着前移 → 正反馈发散
+        # (min_move2 实测:指令 0.1m/s,实际窜到 0.48m/s、侧漂 0.73m)。
+        # 改为累积积分:目标以指令速度匀速推进,首拍锚定当前位置,之后不再跟随实测。
+        if not state.get("setpoint_anchor_initialized"):
+            state["local_setpoint_x_m"] = base_x
+            state["local_setpoint_y_m"] = base_y
+            state["setpoint_anchor_initialized"] = True
+        else:
+            state["local_setpoint_x_m"] = float(state.get("local_setpoint_x_m", base_x) or base_x) + world_vx * dt
+            state["local_setpoint_y_m"] = float(state.get("local_setpoint_y_m", base_y) or base_y) + world_vy * dt
+        # 防跑飞:目标与实测位置的偏差上限(飞机跟不上时目标不再无限前跑)
+        _max_lead = max(0.5, float(SPEC.get("setpoint_lookahead_sec", 2.0) or 2.0) * 0.5)
+        _dx = state["local_setpoint_x_m"] - base_x
+        _dy = state["local_setpoint_y_m"] - base_y
+        _lead = math.hypot(_dx, _dy)
+        if _lead > _max_lead:
+            _k = _max_lead / _lead
+            state["local_setpoint_x_m"] = base_x + _dx * _k
+            state["local_setpoint_y_m"] = base_y + _dy * _k
         # M5 偏航初始化(2026-07-29 BIN 铁证):此前 yaw 目标从 0 累加,而飞机起飞朝向可为任意值
         # (本轮 86°),首条位置目标即命令猛转 86°→0°,转向与平移耦合→姿态跟不上(DesYaw+0.4 vs
         # Yaw 348.8,继而 352 vs 305)→ Roll+58/Pitch-72、振动 101 → 翻车 → CRASH_CHECK 上锁。
