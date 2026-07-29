@@ -54,6 +54,7 @@ def main() -> int:
         "local_setpoint_x_m": 0.0,
         "local_setpoint_y_m": 0.0,
         "local_setpoint_yaw_rad": 0.0,
+        "local_setpoint_yaw_initialized": False,
         "last_local_setpoint_monotonic": 0.0,
         "bootstrap_status": {"ok": False, "state": "not_started"},
         "task_completed": False,
@@ -499,6 +500,14 @@ def main() -> int:
             world_vx, world_vy = vx_mps, vy_mps
         state["local_setpoint_x_m"] = base_x + world_vx * lookahead_sec
         state["local_setpoint_y_m"] = base_y + world_vy * lookahead_sec
+        # M5 偏航初始化(2026-07-29 BIN 铁证):此前 yaw 目标从 0 累加,而飞机起飞朝向可为任意值
+        # (本轮 86°),首条位置目标即命令猛转 86°→0°,转向与平移耦合→姿态跟不上(DesYaw+0.4 vs
+        # Yaw 348.8,继而 352 vs 305)→ Roll+58/Pitch-72、振动 101 → 翻车 → CRASH_CHECK 上锁。
+        # 修:首次下发前用 FCU 当前 yaw 初始化,后续才按 yaw_rate 累加(相对转向,不再瞬间归零)。
+        if not state.get("local_setpoint_yaw_initialized"):
+            yaw_now = state.get("mavlink_yaw_rad")
+            state["local_setpoint_yaw_rad"] = float(yaw_now) if yaw_now is not None else 0.0
+            state["local_setpoint_yaw_initialized"] = True
         state["local_setpoint_yaw_rad"] = float(state.get("local_setpoint_yaw_rad", 0.0) or 0.0) + yaw_rate_radps * dt
         state["last_local_setpoint_monotonic"] = now
         # M5 z闭环(控制器侧):真 GBPlanner 的 3D 路径在规划高度做过碰撞检查,
