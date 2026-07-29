@@ -444,7 +444,13 @@ def main() -> int:
         # intent -- a deadlock. Only forward once the FCU bootstrap (incl.
         # takeoff) is ready.
         if bootstrap_ready(state):
-            publish_cmd_vel_from_intent(payload)
+            # 双重控制修复(2026-07-29 实测):此前同时下发 DDS 速度指令(/ap/v1/cmd_vel)与
+            # MAVLink 位置目标(SET_POSITION_TARGET_LOCAL_NED)。ArduPilot GUIDED 收到速度指令
+            # 切速度控制子模式、收到位置目标切位置控制子模式,两者每秒交替数十次 → 控制子模式
+            # 反复切换 → 连零速度悬停都守不住(纯悬停实验:位置漂 0.8m、15s 内从 0.8m 掉到地面;
+            # 计数 cmd_vel 1050 / setpoint 1046 = 双通道同时打架)。
+            # 对照:hover_mission 路径 10/10 稳定,它只发位置目标、从不发 cmd_vel。
+            # 修:统一走位置目标单一通道(位置控制也是 GBPlanner 航点跟踪所需)。
             send_mavlink_local_position_setpoint(payload)
 
     def publish_cmd_vel_from_intent(payload: dict) -> None:
