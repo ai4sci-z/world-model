@@ -467,10 +467,14 @@ def main() -> int:
         state["cmd_vel_publish_count"] += 1
 
     def refresh_mavlink_local_position(master) -> None:
-        for _ in range(8):
+        # 排空 UDP 队列(2026-07-30 实测根因):FCU 在此端口每 run 灌入 ~96k 条 28 种消息,
+        # 原实现每次仅捞 8 条且遇空即 return → 整个 run 只收到 16/3427 条 LOCAL_POSITION_NED
+        # → 位置目标基准点冻结 → 目标恒定 → 飞机飞到固定点即停(位移 0.56m 后 15 分钟不动)。
+        # 改为每拍排空队列,始终取到最新位置/姿态。
+        for _ in range(2000):
             msg = master.recv_match(type=["LOCAL_POSITION_NED", "ATTITUDE"], blocking=False)
             if msg is None:
-                return
+                break
             if msg.get_type() == "ATTITUDE":
                 # M5 帧闭环:采 FCU 自身 NED yaw,用于机体系 intent → LOCAL_NED 旋转
                 state["mavlink_yaw_rad"] = float(msg.yaw)
