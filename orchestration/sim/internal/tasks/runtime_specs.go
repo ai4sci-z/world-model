@@ -265,7 +265,12 @@ func startupReadinessProbeSpec(
 }
 
 func probeRequiredForRuntime(name string) bool {
-	return name != "slam_hover_probe"
+	// 演示放宽(2026-07-30,负责人指令"我要看飞机用 GBPlanner 长时间飞"):
+	// exploration_probe 以 status.ok 作验收,而 status.ok=true 又会让 orchestrator 判
+	// 任务达标收工(实测两端都活不过 2 分钟:ok=false→探针杀任务;ok=true→任务完成关停)。
+	// 演示期降为非必需,使外部策略可长时间持续探索。**这不是正式验收口径**——WP307/正式
+	// A/A 复跑前必须还原本函数(git revert 本次改动)。
+	return name != "slam_hover_probe" && name != "exploration_probe"
 }
 
 func probeTimeoutSec(name string, durationSec float64) float64 {
@@ -424,7 +429,11 @@ func runtimeRosDistro(project config.ProjectConfig) string {
 // mid-flight (GATE-4b) — it waits for their own exit, bounded by the task
 // deadline.
 func missionService(name string) bool {
-	return strings.HasSuffix(name, "_mission")
+	// exploration_workflow 是 exploration 任务的任务主体(等价于 hover 的 hover_mission),
+	// 但名字不以 _mission 结尾,于是 waitForMissionServices 找不到任何待等服务、立即返回,
+	// 任务时长退化为"探针跑完即收工"(实测 ~123s),与 duration_sec/exploration_window_sec
+	// 完全无关(2026-07-30:这是"时间怎么设都两分钟停"的真因)。将其纳入待等集合。
+	return strings.HasSuffix(name, "_mission") || name == "exploration_workflow"
 }
 
 func usesOfficialBaseline(plan helpers.ExecutionPlan) bool {
