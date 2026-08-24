@@ -2711,3 +2711,10 @@ Reason: task completion, vehicle safety, and recorded evidence must describe the
 same physical run. A status claim cannot substitute for measured motion or FCU
 state, and an outer timeout must not tear down the controller or rosbag before
 the configured closeout has had a chance to succeed or fail explicitly.
+
+Follow-up: return-home setpoints advance toward the captured home at a bounded
+rate and with a bounded lead over measured local-NED position. A 2026-08-24 M5
+run showed that commanding a distant home as one immediate position step drove
+the ArduPilot position controller target velocity to roughly 1.7 m/s and caused
+large cross-home oscillation. The bounded setpoint keeps return dynamics inside
+the same conservative envelope already used for exploration motion.

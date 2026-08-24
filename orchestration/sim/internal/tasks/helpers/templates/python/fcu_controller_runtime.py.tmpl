@@ -79,6 +79,8 @@ def main() -> int:
         "return_home_started_monotonic": None,
         "return_home_completed_monotonic": None,
         "return_home_distance_m": None,
+        "return_setpoint_ned": None,
+        "return_setpoint_last_monotonic": None,
         "land_command_sent": False,
         "land_command_last_sent_monotonic": 0.0,
         "land_command_accepted": False,
@@ -486,6 +488,9 @@ def main() -> int:
         if SPEC.get("landing_policy") == "return_home_then_land":
             state["landing_phase"] = "returning_home"
             state["return_home_started_monotonic"] = now
+            if state.get("landing_anchor_ned") is not None:
+                state["return_setpoint_ned"] = dict(state["landing_anchor_ned"])
+                state["return_setpoint_last_monotonic"] = now
         else:
             state["landing_phase"] = "pre_land_hold"
         state["landing_evidence"].start(now, state=state["landing_phase"])
@@ -818,7 +823,39 @@ def main() -> int:
                     state["landing_phase"] = "pre_land_hold"
                     state["landing_phase_started_monotonic"] = now
                     return
-            send_mavlink_position_target(home)
+            target = state.get("return_setpoint_ned")
+            if target is None:
+                if None in (current_x, current_y, current_z):
+                    fail_landing("return_home_setpoint_anchor_missing")
+                    return
+                target = {
+                    "x": float(current_x), "y": float(current_y),
+                    "z": float(current_z), "yaw": float(home["yaw"]),
+                }
+            last = float(state.get("return_setpoint_last_monotonic") or now)
+            dt = min(0.25, max(0.02, now - last))
+            return_speed_mps = min(0.20, max(0.05, float(SPEC.get("motion_speed_mps", 0.10) or 0.10)))
+            to_home_x = float(home["x"]) - float(target["x"])
+            to_home_y = float(home["y"]) - float(target["y"])
+            target_distance = math.hypot(to_home_x, to_home_y)
+            if target_distance > 0.0:
+                step = min(target_distance, return_speed_mps * dt)
+                target["x"] = float(target["x"]) + to_home_x * step / target_distance
+                target["y"] = float(target["y"]) + to_home_y * step / target_distance
+            target["z"] = float(home["z"])
+            target["yaw"] = float(home["yaw"])
+            if current_x is not None and current_y is not None:
+                lead_x = float(target["x"]) - float(current_x)
+                lead_y = float(target["y"]) - float(current_y)
+                lead = math.hypot(lead_x, lead_y)
+                max_lead_m = max(0.20, float(SPEC.get("home_radius_m", 0.35) or 0.35))
+                if lead > max_lead_m:
+                    scale = max_lead_m / lead
+                    target["x"] = float(current_x) + lead_x * scale
+                    target["y"] = float(current_y) + lead_y * scale
+            state["return_setpoint_ned"] = target
+            state["return_setpoint_last_monotonic"] = now
+            send_mavlink_position_target(target)
             return
         if phase == "pre_land_hold":
             target = state.get("home_pose_ned") if SPEC.get("landing_policy") == "return_home_then_land" else state.get("landing_anchor_ned")
