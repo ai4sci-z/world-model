@@ -62,6 +62,11 @@ def main() -> int:
         "mavlink_land_mode": None,
         "mavlink_landed_state": None,
         "mavlink_command_acks": {},
+        "current_range_m": None,
+        "ground_range_m": None,
+        "rangefinder_sample_count": 0,
+        "rangefinder_invalid_sample_count": 0,
+        "rangefinder_last_frame_id": "",
         "local_setpoint_x_m": 0.0,
         "local_setpoint_y_m": 0.0,
         "local_setpoint_yaw_rad": 0.0,
@@ -448,6 +453,29 @@ def main() -> int:
     def on_scan(msg: LaserScan) -> None:
         state["scan"] = msg
         state["scan_count"] += 1
+
+    def on_range(msg: Range) -> None:
+        try:
+            value = float(msg.range)
+            min_range = float(msg.min_range)
+            max_range = float(msg.max_range)
+        except (TypeError, ValueError):
+            state["rangefinder_invalid_sample_count"] += 1
+            return
+        if not math.isfinite(value) or value <= 0.0:
+            state["rangefinder_invalid_sample_count"] += 1
+            return
+        if math.isfinite(min_range) and value < max(0.0, min_range):
+            state["rangefinder_invalid_sample_count"] += 1
+            return
+        if math.isfinite(max_range) and max_range > 0.0 and value > max_range:
+            state["rangefinder_invalid_sample_count"] += 1
+            return
+        if state.get("ground_range_m") is None:
+            state["ground_range_m"] = value
+        state["current_range_m"] = value
+        state["rangefinder_sample_count"] += 1
+        state["rangefinder_last_frame_id"] = str(getattr(msg.header, "frame_id", "") or "")
 
     def begin_landing(now: float) -> None:
         if state.get("landing_phase", "idle") != "idle":
@@ -911,8 +939,8 @@ def main() -> int:
         evidence = state["landing_evidence"]
         evidence.append_descent_sample_from_pose(
             now_monotonic=now,
-            current_range_m=None,
-            ground_range_m=None,
+            current_range_m=state.get("current_range_m"),
+            ground_range_m=state.get("ground_range_m"),
             current_z_ned=current_z,
             ground_z_ned=0.0,
             current_vz_mps=state.get("mavlink_local_vz_mps"),
@@ -920,7 +948,7 @@ def main() -> int:
         landed_on_ground = state.get("mavlink_landed_state") == int(mavutil.mavlink.MAV_LANDED_STATE_ON_GROUND)
         raw_touchdown = landing_touchdown_candidate(
             landed_state_on_ground=landed_on_ground,
-            current_range_m=None,
+            current_range_m=state.get("current_range_m"),
             current_z_ned=current_z,
             current_vz_mps=state.get("mavlink_local_vz_mps"),
             touchdown_altitude_m=float(SPEC.get("touchdown_altitude_m", 0.12) or 0.12),
@@ -962,6 +990,8 @@ def main() -> int:
         subscriptions.append(node.create_subscription(Imu, SPEC["imu_input_topic"], on_imu, qos_profile_sensor_data))
     if SPEC.get("scan_output_topic"):
         subscriptions.append(node.create_subscription(LaserScan, SPEC["scan_output_topic"], on_scan, qos_profile_sensor_data))
+    if SPEC.get("rangefinder_range_topic"):
+        subscriptions.append(node.create_subscription(Range, SPEC["rangefinder_range_topic"], on_range, qos_profile_sensor_data))
     if SPEC.get("task_completion_status_topic"):
         subscriptions.append(node.create_subscription(String, SPEC["task_completion_status_topic"], on_task_completion, 10))
     cmd_vel_pub = node.create_publisher(TwistStamped, SPEC["cmd_vel_topic"], 10)
@@ -971,8 +1001,6 @@ def main() -> int:
     owner_pub = node.create_publisher(String, SPEC["owner_status_topic"], 10)
     hover_pub = node.create_publisher(String, SPEC["hover_status_topic"], 10)
     landing_pub = node.create_publisher(String, SPEC["landing_status_topic"], 10)
-    range_pub = node.create_publisher(Range, SPEC["rangefinder_range_topic"], 10)
-    range_status_pub = node.create_publisher(String, SPEC["rangefinder_status_topic"], 10)
     imu_pub = optional_publisher(node, Imu, SPEC.get("imu_output_topic"), SPEC.get("imu_input_topic"))
     scan_input_pub = optional_publisher(node, LaserScan, SPEC.get("scan_input_topic"), SPEC.get("scan_output_topic"))
     scan_stabilization_pub = optional_string_publisher(node, SPEC.get("scan_stabilization_topic"))
@@ -1046,8 +1074,6 @@ def main() -> int:
             scan_stabilization_pub.publish(string_msg(scan_stabilization_status(state)))
         if disturbance_pub is not None:
             disturbance_pub.publish(string_msg(airframe_disturbance_status(state)))
-        range_pub.publish(range_msg(now_msg, pose))
-        range_status_pub.publish(string_msg(range_status(pose)))
         time.sleep(rate_sec)
 
     if (
@@ -1325,6 +1351,15 @@ def landing_status(state: dict) -> dict:
         "mavlink_custom_mode": state.get("mavlink_custom_mode"),
         "mavlink_land_mode": state.get("mavlink_land_mode"),
         "mavlink_command_acks": state.get("mavlink_command_acks", {}),
+        "rangefinder_input": {
+            "source": "rangefinder_topic_subscription",
+            "topic": SPEC.get("rangefinder_range_topic", ""),
+            "sample_count": state.get("rangefinder_sample_count", 0),
+            "invalid_sample_count": state.get("rangefinder_invalid_sample_count", 0),
+            "current_range_m": state.get("current_range_m"),
+            "ground_range_m": state.get("ground_range_m"),
+            "last_frame_id": state.get("rangefinder_last_frame_id", ""),
+        },
         "descent_profile": state["landing_evidence"].descent_profile(
             max_descent_rate_mps=float(SPEC.get("max_landing_descent_rate_mps", 0.6) or 0.6),
             touchdown_altitude_m=float(SPEC.get("touchdown_altitude_m", 0.12) or 0.12),
@@ -1434,33 +1469,6 @@ def airframe_disturbance_status(state: dict) -> dict:
             "samples": state.get("pose_count", 0),
             "ok": pose_ready,
         },
-    }
-
-def range_msg(stamp, pose):
-    from sensor_msgs.msg import Range
-
-    msg = Range()
-    msg.header.stamp = stamp
-    msg.header.frame_id = "rangefinder_down_frame"
-    msg.radiation_type = Range.INFRARED
-    msg.field_of_view = 0.05
-    msg.min_range = 0.1
-    msg.max_range = 8.0
-    if pose is not None:
-        msg.range = max(0.1, abs(float(pose.pose.position.z)))
-    else:
-        msg.range = 0.5
-    return msg
-
-def range_status(pose) -> dict:
-    return {
-        "ok": True,
-        "ready": True,
-        "source": "fcu_pose_relay",
-        "current_distance_m": 0.5 if pose is None else max(0.1, abs(float(pose.pose.position.z))),
-        "min_distance_m": 0.1,
-        "max_distance_m": 8.0,
-        "orientation": 25,
     }
 
 if __name__ == "__main__":

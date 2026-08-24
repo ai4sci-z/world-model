@@ -877,7 +877,13 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		`subscriptions.append(node.create_subscription(PoseStamped, SPEC["pose_topic"], on_pose, qos_profile_sensor_data))`,
 		`subscriptions.append(node.create_subscription(Odometry, SPEC["slam_odom_topic"], on_slam_odom, qos_profile_sensor_data))`,
 		`subscriptions.append(node.create_subscription(String, SPEC["setpoint_intent_topic"], on_setpoint_intent, 10))`,
+		`subscriptions.append(node.create_subscription(Range, SPEC["rangefinder_range_topic"], on_range, qos_profile_sensor_data))`,
 		"import threading",
+		`state["ground_range_m"] = value`,
+		`state["current_range_m"] = value`,
+		`current_range_m=state.get("current_range_m")`,
+		`ground_range_m=state.get("ground_range_m")`,
+		`"source": "rangefinder_topic_subscription"`,
 		`state["pose_source"] = "slam_odom"`,
 		`state.get("pose_source") != "slam_odom"`,
 		"bootstrap_thread = threading.Thread(target=run_bootstrap, daemon=True)",
@@ -926,6 +932,10 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("fcu controller script missing %q:\n%s", expected, text)
 		}
+	}
+	if strings.Contains(text, `range_pub = node.create_publisher(Range, SPEC["rangefinder_range_topic"], 10)`) ||
+		strings.Contains(text, `"source": "fcu_pose_relay",\n        "current_distance_m"`) {
+		t.Fatalf("fcu controller must not publish a competing pose-relay rangefinder stream:\n%s", text)
 	}
 	if strings.Contains(text, `target_min = max(0.2, altitude_m * 0.45)`) {
 		t.Fatalf("fcu controller script kept stale hard-coded takeoff threshold:\n%s", text)
