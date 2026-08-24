@@ -2718,3 +2718,19 @@ run showed that commanding a distant home as one immediate position step drove
 the ArduPilot position controller target velocity to roughly 1.7 m/s and caused
 large cross-home oscillation. The bounded setpoint keeps return dynamics inside
 the same conservative envelope already used for exploration motion.
+
+Validation: M5 run `20260824T075515.387084602Z`, pinned to WorldModel
+`fd4296f` and GBPlanner `887a420`, completed with `TASK_STATUS_OK` and exit code
+zero. The same 150.174-second MCAP recorded three measured GBPlanner waypoint
+arrivals, 4.0871 m of adapter path, return-home distance 0.32648 m against the
+strict 0.35 m radius, accepted LAND command, observed LAND mode, touchdown,
+disarm, and motors-safe state. The exploration and landing samples both had
+empty acceptance blockers.
+
+Residual diagnostic: the run also recorded late lidar3d-to-map transform queue
+drops, and the fallback local-z descent profile reported `speed_ok=false` even
+though MAVLink touchdown/disarm evidence completed the configured landing gate.
+Those observations do not negate the P1-2 simulation closeout, but they remain
+open robustness and evidence-quality work; they must not be described as fixed
+or used to claim that the later multi-run comparison or lossless-3D stage is
+complete.
