@@ -2687,3 +2687,27 @@ Reason: this is still an internal orchestration artifact. Breaking now keeps
 review, gate, cohort, and future shared readers pointed at one shape while the
 surface area is small. Runtime side effects and evidence adapters remain
 domain-specific; only the workflow artifact contract is shared.
+
+## 2026-08-24: Exploration completion requires measured return and landing
+
+Decision: replace the exploration controller's claim-only landing status with
+an executable, fail-closed MAVLink closeout. A successful exploration status
+must satisfy the locally configured goal and path minima before the controller
+freezes motion ownership, returns to the measured post-takeoff local-NED home,
+hands off with `MAV_CMD_NAV_LAND`, and confirms LAND ACK, observed LAND mode,
+touchdown, disarm, and motors-safe evidence. The earlier exploration landing
+claim is obsolete and must not be used as acceptance evidence.
+
+Basis: the 2026-08-24 M5 run exposed two coupled defects: external status could
+trigger completion before the configured minimum goal count, and the probe/run
+could finish without a real return or landing. The generated FCU controller now
+reads `LOCAL_POSITION_NED`, `ATTITUDE`, `HEARTBEAT`, `EXTENDED_SYS_STATE`, and
+`COMMAND_ACK`; the external exploration workflow exits when the landing status
+actually completes. The exploration observation budget is derived from DDS,
+FCU readiness, exploration, pre-land hold, return-home, and landing allowances,
+with separate margins for the probe container and Go watchdog.
+
+Reason: task completion, vehicle safety, and recorded evidence must describe the
+same physical run. A status claim cannot substitute for measured motion or FCU
+state, and an outer timeout must not tear down the controller or rosbag before
+the configured closeout has had a chance to succeed or fail explicitly.

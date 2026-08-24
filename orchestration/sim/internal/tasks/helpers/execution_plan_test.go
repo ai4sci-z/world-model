@@ -430,9 +430,22 @@ func TestRuntimeSpecsGenerateScriptsAndConfigs(t *testing.T) {
 		!strings.Contains(script, "master.mav.set_position_target_local_ned_send") ||
 		!strings.Contains(script, "mavutil.mavlink.MAV_FRAME_LOCAL_NED") ||
 		!strings.Contains(script, "mavlink_setpoint_count") ||
-		!strings.Contains(script, "refresh_mavlink_local_position(master)") ||
+		!strings.Contains(script, "refresh_mavlink_state(master)") ||
 		!strings.Contains(script, "setpoint_lookahead_sec") {
 		t.Fatalf("controller script missing MAVLink local-position setpoint controls:\n%s", script)
+	}
+	for _, expected := range []string{
+		"def tick_landing_fsm(now: float) -> None:",
+		"mavutil.mavlink.MAV_CMD_NAV_LAND",
+		"mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM",
+		`state["landing_phase"] = "returning_home"`,
+		`state["mavlink_armed"] = bool(`,
+		`state["mavlink_landed_state"] = int(msg.landed_state)`,
+		`and state.get("land_mode_seen", False)`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("controller script missing real landing FSM evidence %q:\n%s", expected, script)
+		}
 	}
 	if !strings.Contains(script, `takeoff_min_height_m`) ||
 		!strings.Contains(script, `takeoff_min_height_ratio`) ||
@@ -605,6 +618,24 @@ func TestExplorationWorkflowStartsGoalTimingAfterControllerReady(t *testing.T) {
 	}
 	if strings.Contains(script, `goal_index = min(int(elapsed / segment_sec), min_goals - 1)`) {
 		t.Fatalf("exploration workflow still advances goals from task start:\n%s", script)
+	}
+}
+
+func TestExternalExplorationWorkflowExitsAfterLandingCompletes(t *testing.T) {
+	spec := DefaultExplorationWorkflowSpec()
+	spec.Strategy = "external"
+	script, err := ExplorationWorkflowRuntimeScript(spec, 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`def on_landing_status(msg: String) -> None:`,
+		`node.create_subscription(String, SPEC["landing_status_topic"], on_landing_status, 10)`,
+		`if state.get("landing_complete", False):`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("external exploration workflow missing landing-driven exit %q:\n%s", expected, script)
+		}
 	}
 }
 

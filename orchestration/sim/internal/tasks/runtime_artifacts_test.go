@@ -3,6 +3,7 @@ package tasks
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -887,7 +888,7 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		`master.mav.set_position_target_local_ned_send`,
 		`mavutil.mavlink.MAV_FRAME_LOCAL_NED`,
 		`mavlink_setpoint_count`,
-		`refresh_mavlink_local_position(master)`,
+		`refresh_mavlink_state(master)`,
 		`setpoint_lookahead_sec`,
 		`z_m_raw = payload.get("z_m")`,
 		`if z_up_m is not None and 0.05 < z_up_m < 100.0:`,
@@ -898,6 +899,18 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		`state["local_setpoint_yaw_rad"] = float(yaw_now)`,
 		`world_vy = vx_mps * sin_y + vy_mps * cos_y`,
 		`z_ned_m = -min(3.0, max(0.3, z_up_m))`,
+		`def tick_landing_fsm(now: float) -> None:`,
+		`mavutil.mavlink.MAV_CMD_NAV_LAND`,
+		`mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM`,
+		`state["landing_phase"] = "returning_home"`,
+		`state["mavlink_landed_state"] = int(msg.landed_state)`,
+		`state["mavlink_armed"] = bool(`,
+		`min_accepted_goals = max(configured_min_goals, reported_min_goals)`,
+		`min_path_length_m = max(configured_min_path_m, reported_min_path_m)`,
+		`completed = payload.get("ok") is True and (`,
+		`land_mode = mode_mapping.get("LAND")`,
+		`state.get("land_command_sent", False)`,
+		`fail_landing("controller_runtime_deadline_exceeded")`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("fcu controller script missing %q:\n%s", expected, text)
@@ -908,6 +921,31 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 	}
 	if strings.Contains(text, `"state": "hover_hold" if ready`) {
 		t.Fatalf("fcu controller must not alias controller readiness to hover_hold:\n%s", text)
+	}
+	if output, err := exec.Command("python3", "-m", "py_compile", artifactlayout.RuntimeScript(artifactDir, "fcu_controller_runtime.py")).CombinedOutput(); err != nil {
+		t.Fatalf("generated fcu controller does not compile: %v\n%s", err, output)
+	}
+}
+
+func TestExplorationSpecBudgetsProbeThroughLandingCloseout(t *testing.T) {
+	runtimeConfig := config.TaskRuntimeConfig{
+		FCUController: config.FCUControllerConfig{
+			ReadinessTimeoutSec: 45,
+		},
+		ExplorationGate: config.ExplorationGateConfig{
+			Strategy:             "external",
+			ExplorationWindowSec: 26,
+		},
+		Landing: config.LandingConfig{
+			ExplorationPolicy:        helpers.PolicyReturnHomeThenLand,
+			PreLandHoldSec:           2,
+			MaxReturnHomeDurationSec: 45,
+			MaxLandingDurationSec:    35,
+		},
+	}
+	spec := explorationSpec(runtimeConfig)
+	if spec.ProbeTimeoutSec != 168 {
+		t.Fatalf("exploration probe timeout = %v, want DDS + readiness + exploration + hold + return + landing budget 168", spec.ProbeTimeoutSec)
 	}
 }
 

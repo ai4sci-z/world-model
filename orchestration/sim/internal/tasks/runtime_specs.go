@@ -281,9 +281,12 @@ func probeTimeoutSec(name string, durationSec float64) float64 {
 		return 150
 	}
 	if name == "exploration_probe" {
-		// Container ceiling for the 90s in-script status budget plus interpreter
-		// startup; must strictly exceed the script budget or the container is
-		// killed as "context deadline exceeded" before the script can report.
+		// The generated in-script budget is config-derived. Keep the container
+		// alive for the task window plus startup/exit overhead so it can emit its
+		// own fail-closed result instead of being killed by Docker first.
+		if durationSec+30 > 150 {
+			return durationSec + 30
+		}
 		return 150
 	}
 	if name == "frame_contract_probe" {
@@ -299,6 +302,19 @@ func probeTimeoutSec(name string, durationSec float64) float64 {
 		return 120
 	}
 	return 30
+}
+
+// RuntimeTaskDeadlineSec keeps the Go watchdog outside the longest required
+// in-script observation budget. Other tasks retain their configured deadline.
+func RuntimeTaskDeadlineSec(plan Plan, runtimeConfig config.TaskRuntimeConfig) float64 {
+	deadlineSec := plan.DurationSec
+	if plan.TaskID == "exploration" {
+		candidate := explorationSpec(runtimeConfig).ProbeTimeoutSec + 10.0
+		if candidate > deadlineSec {
+			deadlineSec = candidate
+		}
+	}
+	return deadlineSec
 }
 
 func resolveImageRef(project config.ProjectConfig, ref string) (string, error) {

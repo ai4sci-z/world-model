@@ -33,6 +33,7 @@ def main() -> int:
         "completed_ms": 0,
         "completed_at": 0.0,
         "last_intent": {},
+        "landing_complete": False,
     }
 
     def on_controller_status(msg: String) -> None:
@@ -64,8 +65,13 @@ def main() -> int:
                 state["path_length_m"] += step
         state["last_xyz"] = xyz
 
+    def on_landing_status(msg: String) -> None:
+        payload = parse_json(msg.data)
+        state["landing_complete"] = payload.get("ok") is True
+
     node.create_subscription(String, SPEC["controller_status_topic"], on_controller_status, 10)
     node.create_subscription(Odometry, SPEC["slam_odom_topic"], on_slam_odom, qos_profile_sensor_data)
+    node.create_subscription(String, SPEC["landing_status_topic"], on_landing_status, 10)
     intent_pub = node.create_publisher(String, SPEC["setpoint_intent_topic"], 10)
     status_pub = node.create_publisher(String, SPEC["exploration_status_topic"], 10)
     goal_pub = node.create_publisher(String, "/navlab/exploration/goal", 10)
@@ -86,10 +92,13 @@ def main() -> int:
     if str(SPEC.get("strategy", "")) == "external":
         # External exploration strategy: an out-of-process planner (e.g. a
         # bridged GBPlanner) drives /navlab/fcu/setpoint/intent and owns
-        # /navlab/exploration/status. The built-in workflow stays fully
-        # passive for the whole window so the two never interleave.
+        # /navlab/exploration/status. The built-in workflow stays passive until
+        # landing completes or the safety deadline expires, so the two never
+        # interleave and the runner can close out event-by-event.
         while rclpy.ok() and time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.02)
+            if state.get("landing_complete", False):
+                break
             time.sleep(0.2)
         node.destroy_node()
         rclpy.shutdown()

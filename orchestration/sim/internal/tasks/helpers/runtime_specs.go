@@ -251,7 +251,17 @@ type FCUControllerSpec struct {
 	BaseFrameID                     string
 	LaserFrameID                    string
 	LandingPolicy                   string
+	HomeSource                      string
+	HomeRadiusM                     float64
+	PreLandHoldSec                  float64
 	CompletionGraceSec              float64
+	MaxReturnHomeDurationSec        float64
+	MaxLandingDurationSec           float64
+	MaxLandingDescentRateMPS        float64
+	TouchdownAltitudeM              float64
+	TouchdownVerticalSpeedMPS       float64
+	RequireDisarm                   bool
+	RequireMotorsSafe               bool
 	MotionSpeedMPS                  float64
 	MinAcceptedGoals                int
 	MinPathLengthM                  float64
@@ -313,7 +323,17 @@ func DefaultFCUControllerSpec() FCUControllerSpec {
 		BaseFrameID:                     "base_link",
 		LaserFrameID:                    "base_scan",
 		LandingPolicy:                   "land_in_place",
+		HomeSource:                      "post_takeoff_hover_pose",
+		HomeRadiusM:                     0.35,
+		PreLandHoldSec:                  2.0,
 		CompletionGraceSec:              3.0,
+		MaxReturnHomeDurationSec:        45.0,
+		MaxLandingDurationSec:           35.0,
+		MaxLandingDescentRateMPS:        0.6,
+		TouchdownAltitudeM:              0.12,
+		TouchdownVerticalSpeedMPS:       0.08,
+		RequireDisarm:                   true,
+		RequireMotorsSafe:               true,
 		MotionSpeedMPS:                  0.0,
 		MinAcceptedGoals:                0,
 		MinPathLengthM:                  0.0,
@@ -393,7 +413,17 @@ func FCUControllerRuntimeScript(spec FCUControllerSpec, durationSec float64) (st
 		"hover_status_topic":                 "/navlab/hover/status",
 		"landing_status_topic":               "/navlab/landing/status",
 		"landing_policy":                     spec.LandingPolicy,
+		"home_source":                        spec.HomeSource,
+		"home_radius_m":                      spec.HomeRadiusM,
+		"pre_land_hold_sec":                  spec.PreLandHoldSec,
 		"completion_grace_sec":               spec.CompletionGraceSec,
+		"max_return_home_duration_sec":       spec.MaxReturnHomeDurationSec,
+		"max_landing_duration_sec":           spec.MaxLandingDurationSec,
+		"max_landing_descent_rate_mps":       spec.MaxLandingDescentRateMPS,
+		"touchdown_altitude_m":               spec.TouchdownAltitudeM,
+		"touchdown_vertical_speed_mps":       spec.TouchdownVerticalSpeedMPS,
+		"require_disarm":                     spec.RequireDisarm,
+		"require_motors_safe":                spec.RequireMotorsSafe,
 		"motion_speed_mps":                   spec.MotionSpeedMPS,
 		"min_accepted_goals":                 spec.MinAcceptedGoals,
 		"min_path_length_m":                  spec.MinPathLengthM,
@@ -1121,6 +1151,7 @@ type ExplorationWorkflowSpec struct {
 	SetpointOutputTopic    string
 	SlamOdomTopic          string
 	ExplorationStatusTopic string
+	LandingStatusTopic     string
 }
 
 func DefaultExplorationWorkflowSpec() ExplorationWorkflowSpec {
@@ -1140,6 +1171,7 @@ func DefaultExplorationWorkflowSpec() ExplorationWorkflowSpec {
 		SetpointOutputTopic:    "/navlab/fcu/setpoint/output",
 		SlamOdomTopic:          "/slam/odom",
 		ExplorationStatusTopic: "/navlab/exploration/status",
+		LandingStatusTopic:     "/navlab/landing/status",
 	}
 }
 
@@ -1178,6 +1210,7 @@ func ExplorationWorkflowRuntimeScript(spec ExplorationWorkflowSpec, durationSec 
 		"setpoint_output_topic":    spec.SetpointOutputTopic,
 		"slam_odom_topic":          spec.SlamOdomTopic,
 		"exploration_status_topic": spec.ExplorationStatusTopic,
+		"landing_status_topic":     spec.LandingStatusTopic,
 	})
 	if err != nil {
 		return "", err

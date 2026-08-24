@@ -1163,7 +1163,7 @@ func runLiveTask(
 		tasks.RuntimeExecutionOptions{
 			WaitForRosbags:         true,
 			RosbagPostTaskGraceSec: tasks.DefaultRosbagPostTaskGraceSec,
-			TaskDeadlineSec:        plan.DurationSec,
+			TaskDeadlineSec:        tasks.RuntimeTaskDeadlineSec(plan, taskRuntimeConfig),
 			TaskID:                 plan.TaskID,
 			RunID:                  result.RunID,
 			ArtifactDir:            result.ArtifactDir,

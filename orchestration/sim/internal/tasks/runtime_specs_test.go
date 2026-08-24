@@ -837,3 +837,23 @@ func TestProbeRequiredForRuntime(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeTaskDeadlineCoversExplorationCloseout(t *testing.T) {
+	plan := Plan{TaskID: "exploration", DurationSec: 150}
+	runtimeConfig := config.TaskRuntimeConfig{
+		FCUController:   config.FCUControllerConfig{ReadinessTimeoutSec: 45},
+		ExplorationGate: config.ExplorationGateConfig{ExplorationWindowSec: 26},
+		Landing: config.LandingConfig{
+			ExplorationPolicy:        helpers.PolicyReturnHomeThenLand,
+			PreLandHoldSec:           2,
+			MaxReturnHomeDurationSec: 45,
+			MaxLandingDurationSec:    35,
+		},
+	}
+	if got := RuntimeTaskDeadlineSec(plan, runtimeConfig); got != 178 {
+		t.Fatalf("RuntimeTaskDeadlineSec() = %v, want probe budget 168 + 10s watchdog margin", got)
+	}
+	if got := probeTimeoutSec("exploration_probe", plan.DurationSec); got != 180 {
+		t.Fatalf("exploration probe container timeout = %v, want duration + 30s", got)
+	}
+}

@@ -169,8 +169,19 @@ func GenerateRuntimeArtifacts(
 	if hasHelper(plan, "fcu-controller") {
 		path := artifactlayout.RuntimeConfig(artifactDir, "fcu_controller_runtime.toml")
 		spec := fcuSpec(runtimeConfig)
+		landing := runtimeConfig.Landing
 		spec.LandingPolicy = landingPolicyForTask(runtimeConfig, plan.TaskID)
-		spec.CompletionGraceSec = runtimeConfig.Landing.CompletionGraceSec
+		spec.HomeSource = landing.HomeSource
+		spec.HomeRadiusM = landing.HomeRadiusM
+		spec.PreLandHoldSec = landing.PreLandHoldSec
+		spec.CompletionGraceSec = landing.CompletionGraceSec
+		spec.MaxReturnHomeDurationSec = landing.MaxReturnHomeDurationSec
+		spec.MaxLandingDurationSec = landing.MaxLandingDurationSec
+		spec.MaxLandingDescentRateMPS = landing.MaxDescentRateMPS
+		spec.TouchdownAltitudeM = landing.TouchdownAltitudeM
+		spec.TouchdownVerticalSpeedMPS = landing.TouchdownVerticalSpeedMPS
+		spec.RequireDisarm = landing.RequireDisarm
+		spec.RequireMotorsSafe = landing.RequireMotorsSafe
 		if hasHelper(plan, "exploration-workflow") {
 			exploration := explorationSpec(runtimeConfig)
 			spec.MotionSpeedMPS = exploration.MotionSpeedMPS
@@ -875,6 +886,24 @@ func explorationSpec(runtimeConfig config.TaskRuntimeConfig) helpers.Exploration
 	spec.SetpointOutputTopic = exploration.SetpointOutputTopic
 	spec.SlamOdomTopic = exploration.SlamOdomTopic
 	spec.ExplorationStatusTopic = exploration.ExplorationStatusTopic
+	landing := runtimeConfig.Landing
+	if landing.LandingStatusTopic != "" {
+		spec.LandingStatusTopic = landing.LandingStatusTopic
+	}
+	readinessBudgetSec := runtimeConfig.FCUController.ReadinessTimeoutSec
+	if readinessBudgetSec <= 0 {
+		readinessBudgetSec = helpers.DefaultFCUControllerSpec().ReadinessTimeoutSec
+	}
+	landingBudgetSec := landing.MaxLandingDurationSec
+	if landingPolicyForTask(runtimeConfig, "exploration") == helpers.PolicyReturnHomeThenLand {
+		landingBudgetSec += landing.MaxReturnHomeDurationSec
+	}
+	// The probe starts with the runtime services, so its in-script wait must
+	// cover DDS discovery, FCU readiness, exploration, and the complete closeout.
+	configuredBudgetSec := 15.0 + readinessBudgetSec + exploration.ExplorationWindowSec + landing.PreLandHoldSec + landingBudgetSec
+	if configuredBudgetSec > spec.ProbeTimeoutSec {
+		spec.ProbeTimeoutSec = configuredBudgetSec
+	}
 	return spec
 }
 
