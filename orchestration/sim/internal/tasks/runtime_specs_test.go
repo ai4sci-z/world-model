@@ -816,11 +816,24 @@ func TestMissionServiceMarking(t *testing.T) {
 	for name, want := range map[string]bool{
 		"hover_mission":                true,
 		"navigation_mission":           true,
+		"exploration_workflow":         true,
 		"slam_backend":                 false,
 		"external_nav_source_selector": false,
 	} {
 		if got := missionService(name); got != want {
 			t.Fatalf("missionService(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestProbeRequiredForRuntime(t *testing.T) {
+	for name, want := range map[string]bool{
+		"exploration_probe":    true,
+		"frame_contract_probe": true,
+		"slam_hover_probe":     false,
+	} {
+		if got := probeRequiredForRuntime(name); got != want {
+			t.Fatalf("probeRequiredForRuntime(%q) = %v, want %v", name, got, want)
 		}
 	}
 }

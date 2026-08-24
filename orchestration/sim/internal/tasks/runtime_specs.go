@@ -265,12 +265,7 @@ func startupReadinessProbeSpec(
 }
 
 func probeRequiredForRuntime(name string) bool {
-	// 演示放宽(2026-07-30,负责人指令"我要看飞机用 GBPlanner 长时间飞"):
-	// exploration_probe 以 status.ok 作验收,而 status.ok=true 又会让 orchestrator 判
-	// 任务达标收工(实测两端都活不过 2 分钟:ok=false→探针杀任务;ok=true→任务完成关停)。
-	// 演示期降为非必需,使外部策略可长时间持续探索。**这不是正式验收口径**——WP307/正式
-	// A/A 复跑前必须还原本函数(git revert 本次改动)。
-	return name != "slam_hover_probe" && name != "exploration_probe"
+	return name != "slam_hover_probe"
 }
 
 func probeTimeoutSec(name string, durationSec float64) float64 {
