@@ -747,6 +747,9 @@ func assertProbeScriptRetriesTopicEcho(t *testing.T, path string) {
 		"from rosidl_runtime_py.utilities import get_message",
 		`getattr(msg, "data", None)`,
 		"parse_json_payload(data)",
+		"def string_holder_ready(holder: dict) -> bool:",
+		`parsed.get("terminal") is True`,
+		`"ok": string_holder_ok(holder)`,
 		`"attempts": attempts`,
 	} {
 		if !strings.Contains(text, want) {
@@ -910,7 +913,12 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		`state["mavlink_armed"] = bool(`,
 		`min_accepted_goals = max(configured_min_goals, reported_min_goals)`,
 		`min_path_length_m = max(configured_min_path_m, reported_min_path_m)`,
-		`completed = payload.get("ok") is True and (`,
+		`completed = metrics_valid and payload.get("ok") is True and (`,
+		`terminal_failure = payload.get("terminal") is True`,
+		`state["task_terminal"] = True`,
+		`state["task_failure_blockers"] = [str(item) for item in blockers]`,
+		`def begin_landing(now: float) -> None:`,
+		`begin_landing(now)`,
 		`land_mode = mode_mapping.get("LAND")`,
 		`state.get("land_command_sent", False)`,
 		`fail_landing("controller_runtime_deadline_exceeded")`,

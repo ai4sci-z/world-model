@@ -70,6 +70,8 @@ def main() -> int:
         "last_local_setpoint_monotonic": 0.0,
         "bootstrap_status": {"ok": False, "state": "not_started"},
         "task_completed": False,
+        "task_terminal": False,
+        "task_failure_blockers": [],
         "task_completion_status": {},
         "home_pose_ned": None,
         "landing_anchor_ned": None,
@@ -447,33 +449,9 @@ def main() -> int:
         state["scan"] = msg
         state["scan_count"] += 1
 
-    def on_task_completion(msg: String) -> None:
-        try:
-            payload = json.loads(msg.data)
-        except Exception:
-            payload = {}
-        state["task_completion_status"] = payload
-        try:
-            accepted_goals = int(payload.get("accepted_goals", 0) or 0)
-            configured_min_goals = int(SPEC.get("min_accepted_goals", 0) or 0)
-            reported_min_goals = int(payload.get("min_accepted_goals", configured_min_goals) or 0)
-            min_accepted_goals = max(configured_min_goals, reported_min_goals)
-            path_length_m = float(payload.get("path_length_m", 0.0) or 0.0)
-            configured_min_path_m = float(SPEC.get("min_path_length_m", 0.0) or 0.0)
-            reported_min_path_m = float(payload.get("min_path_length_m", configured_min_path_m) or 0.0)
-            min_path_length_m = max(configured_min_path_m, reported_min_path_m)
-        except (TypeError, ValueError):
+    def begin_landing(now: float) -> None:
+        if state.get("landing_phase", "idle") != "idle":
             return
-        blockers = payload.get("blockers", []) or []
-        completed = payload.get("ok") is True and (
-            accepted_goals >= min_accepted_goals
-            and path_length_m >= min_path_length_m
-            and len(blockers) == 0
-        )
-        if not completed or state.get("task_completed", False):
-            return
-        state["task_completed"] = True
-        now = time.monotonic()
         state["landing_started_monotonic"] = now
         state["landing_phase_started_monotonic"] = now
         current_x = state.get("mavlink_local_x_m")
@@ -494,6 +472,53 @@ def main() -> int:
         else:
             state["landing_phase"] = "pre_land_hold"
         state["landing_evidence"].start(now, state=state["landing_phase"])
+
+    def on_task_completion(msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        state["task_completion_status"] = payload
+        terminal_failure = payload.get("terminal") is True
+        metrics_valid = True
+        try:
+            accepted_goals = int(payload.get("accepted_goals", 0) or 0)
+            configured_min_goals = int(SPEC.get("min_accepted_goals", 0) or 0)
+            reported_min_goals = int(payload.get("min_accepted_goals", configured_min_goals) or 0)
+            min_accepted_goals = max(configured_min_goals, reported_min_goals)
+            path_length_m = float(payload.get("path_length_m", 0.0) or 0.0)
+            configured_min_path_m = float(SPEC.get("min_path_length_m", 0.0) or 0.0)
+            reported_min_path_m = float(payload.get("min_path_length_m", configured_min_path_m) or 0.0)
+            min_path_length_m = max(configured_min_path_m, reported_min_path_m)
+        except (TypeError, ValueError):
+            metrics_valid = False
+            accepted_goals = 0
+            min_accepted_goals = 0
+            path_length_m = 0.0
+            min_path_length_m = 0.0
+        blockers = payload.get("blockers", []) or []
+        if not isinstance(blockers, list):
+            blockers = [str(blockers)]
+        completed = metrics_valid and payload.get("ok") is True and (
+            accepted_goals >= min_accepted_goals
+            and path_length_m >= min_path_length_m
+            and len(blockers) == 0
+        )
+        if state.get("task_completed", False) or state.get("task_terminal", False):
+            return
+        if terminal_failure:
+            state["task_terminal"] = True
+            state["task_failure_blockers"] = [str(item) for item in blockers]
+            if not state["task_failure_blockers"]:
+                state["task_failure_blockers"] = ["terminal_failure"]
+        elif completed:
+            state["task_completed"] = True
+        else:
+            return
+        now = time.monotonic()
+        begin_landing(now)
 
     def on_setpoint_intent(msg: String) -> None:
         try:
@@ -1025,7 +1050,9 @@ def main() -> int:
         range_status_pub.publish(string_msg(range_status(pose)))
         time.sleep(rate_sec)
 
-    if state.get("task_completed", False) and state.get("landing_phase") not in {"complete", "failed"}:
+    if (
+        state.get("task_completed", False) or state.get("task_terminal", False)
+    ) and state.get("landing_phase") not in {"complete", "failed"}:
         fail_landing("controller_runtime_deadline_exceeded")
         controller_pub.publish(string_msg(controller_status(state)))
         landing_pub.publish(string_msg(landing_status(state)))
@@ -1272,6 +1299,8 @@ def landing_status(state: dict) -> dict:
         "policy": policy,
         "state": "landing_complete" if ready else phase,
         "task_completed": task_completed,
+        "task_terminal": bool(state.get("task_terminal", False)),
+        "task_failure_blockers": state.get("task_failure_blockers", []),
         "return_home": {
             "required": required_return,
             "ok": return_complete if required_return else True,

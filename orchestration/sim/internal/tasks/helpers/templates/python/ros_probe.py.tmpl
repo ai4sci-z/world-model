@@ -321,7 +321,7 @@ def sample_string_topics(topics: list[str]) -> dict:
     deadline = time.monotonic() + STRING_READY_TIMEOUT_SEC
     while rclpy.ok() and time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.1)
-        if all(string_holder_ok(holder) for holder in holders.values()):
+        if all(string_holder_ready(holder) for holder in holders.values()):
             break
     subscriptions.clear()
     node.destroy_node()
@@ -349,6 +349,13 @@ def string_holder_ok(holder: dict) -> bool:
     data = holder.get("data")
     parsed = holder.get("parsed")
     return data is not None and string_payload_ok(parsed)
+
+def string_holder_ready(holder: dict) -> bool:
+    """A terminal task sample ends waiting but remains an unsuccessful sample."""
+    if string_holder_ok(holder):
+        return True
+    parsed = holder.get("parsed")
+    return isinstance(parsed, dict) and parsed.get("terminal") is True
 
 def string_payload_ok(parsed) -> bool:
     return not isinstance(parsed, dict) or "ok" not in parsed or bool(parsed.get("ok", False))
