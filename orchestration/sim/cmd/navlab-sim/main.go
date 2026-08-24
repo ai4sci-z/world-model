@@ -1057,7 +1057,7 @@ func prepareTaskRun(
 	if err := artifacts.AppendManifestArtifacts(result.ManifestPath, result.ArtifactDir, manifestArtifacts(generatedArtifacts)); err != nil {
 		return preparedTaskRun{}, fmt.Errorf("failed to update run manifest for %q: %w", taskID, err)
 	}
-	runtimeSpecs, err := tasks.BuildRuntimeSpecs(project, plan.Execution, result.ArtifactDir)
+	runtimeSpecs, err := tasks.BuildRuntimeSpecs(project, plan.Execution, result.ArtifactDir, taskRuntimeConfig)
 	if err != nil {
 		return preparedTaskRun{}, fmt.Errorf("failed to validate runtime specs for %q: %w", taskID, err)
 	}

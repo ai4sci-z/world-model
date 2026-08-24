@@ -86,7 +86,11 @@ def main() -> int:
     duration_sec = max(float(SPEC.get("duration_sec", window_sec) or window_sec), window_sec)
     segment_sec = max(2.0, window_sec / float(min_goals))
     start = time.monotonic()
-    deadline = start + duration_sec + 15.0
+    runtime_timeout_sec = max(
+        duration_sec + 15.0,
+        float(SPEC.get("runtime_timeout_sec", 0.0) or 0.0),
+    )
+    deadline = start + runtime_timeout_sec
     completed_hold_sec = 5.0
 
     if str(SPEC.get("strategy", "")) == "external":

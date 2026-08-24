@@ -963,7 +963,11 @@ def main() -> int:
     bootstrap_thread = threading.Thread(target=run_bootstrap, daemon=True)
     bootstrap_thread.start()
 
-    deadline = time.monotonic() + float(SPEC.get("duration_sec", 90.0)) + 30.0
+    runtime_timeout_sec = max(
+        float(SPEC.get("duration_sec", 90.0)) + 30.0,
+        float(SPEC.get("runtime_timeout_sec", 0.0) or 0.0),
+    )
+    deadline = time.monotonic() + runtime_timeout_sec
     rate_sec = 0.05
     while rclpy.ok() and time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.01)

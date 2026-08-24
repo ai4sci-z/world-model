@@ -627,7 +627,7 @@ func TestExplorationWorkflowStartsGoalTimingAfterControllerReady(t *testing.T) {
 func TestExternalExplorationWorkflowExitsAfterLandingCompletes(t *testing.T) {
 	spec := DefaultExplorationWorkflowSpec()
 	spec.Strategy = "external"
-	script, err := ExplorationWorkflowRuntimeScript(spec, 150)
+	script, err := ExplorationWorkflowRuntimeScript(spec, 150, 267)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,10 +635,18 @@ func TestExternalExplorationWorkflowExitsAfterLandingCompletes(t *testing.T) {
 		`def on_landing_status(msg: String) -> None:`,
 		`node.create_subscription(String, SPEC["landing_status_topic"], on_landing_status, 10)`,
 		`if state.get("landing_complete", False):`,
+		`\"runtime_timeout_sec\":267`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("external exploration workflow missing landing-driven exit %q:\n%s", expected, script)
 		}
+	}
+	controllerScript, err := FCUControllerRuntimeScript(DefaultFCUControllerSpec(), 150, 267)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(controllerScript, `\"runtime_timeout_sec\":267`) {
+		t.Fatalf("external exploration controller missing explicit closeout runtime budget:\n%s", controllerScript)
 	}
 }
 

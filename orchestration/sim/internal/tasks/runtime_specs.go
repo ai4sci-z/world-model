@@ -20,8 +20,13 @@ type RuntimeSpecBundle struct {
 	StartupReadinessProbe *simruntime.ProbeSpec    `json:"startup_readiness_probe,omitempty"`
 }
 
-func BuildRuntimeSpecs(project config.ProjectConfig, plan helpers.ExecutionPlan, artifactDir string) (RuntimeSpecBundle, error) {
+func BuildRuntimeSpecs(project config.ProjectConfig, plan helpers.ExecutionPlan, artifactDir string, taskRuntimeConfigs ...config.TaskRuntimeConfig) (RuntimeSpecBundle, error) {
 	var bundle RuntimeSpecBundle
+	var taskRuntimeConfig config.TaskRuntimeConfig
+	hasTaskRuntimeConfig := len(taskRuntimeConfigs) > 0
+	if hasTaskRuntimeConfig {
+		taskRuntimeConfig = taskRuntimeConfigs[0]
+	}
 	workspaceRoot := project.Paths.WorkspaceRoot
 	if workspaceRoot == "" {
 		workspaceRoot = "."
@@ -150,6 +155,10 @@ func BuildRuntimeSpecs(project config.ProjectConfig, plan helpers.ExecutionPlan,
 		if err != nil {
 			return RuntimeSpecBundle{}, err
 		}
+		timeoutSec := probeTimeoutSec(probe.Name, plan.DurationSec)
+		if probe.Name == "exploration_probe" && hasTaskRuntimeConfig {
+			timeoutSec = explorationProbeContainerTimeoutSec(taskRuntimeConfig, plan.DurationSec)
+		}
 		spec := simruntime.ProbeSpec{
 			Name:       probe.Name,
 			Image:      image,
@@ -161,7 +170,7 @@ func BuildRuntimeSpecs(project config.ProjectConfig, plan helpers.ExecutionPlan,
 			Networks: []string{
 				"host",
 			},
-			TimeoutSec:  probeTimeoutSec(probe.Name, plan.DurationSec),
+			TimeoutSec:  timeoutSec,
 			LogPath:     artifactlayout.Probe(artifactDir, probe.Name+".log"),
 			Required:    probeRequiredForRuntime(probe.Name),
 			ServiceRole: probe.HelperID,
@@ -309,7 +318,7 @@ func probeTimeoutSec(name string, durationSec float64) float64 {
 func RuntimeTaskDeadlineSec(plan Plan, runtimeConfig config.TaskRuntimeConfig) float64 {
 	deadlineSec := plan.DurationSec
 	if plan.TaskID == "exploration" {
-		candidate := explorationSpec(runtimeConfig).ProbeTimeoutSec + 10.0
+		candidate := explorationSpec(runtimeConfig).ProbeTimeoutSec + explorationWatchdogMarginSec
 		if candidate > deadlineSec {
 			deadlineSec = candidate
 		}

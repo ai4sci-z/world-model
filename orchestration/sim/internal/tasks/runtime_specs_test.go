@@ -185,6 +185,60 @@ func TestProbeTimeoutsAllowExplorationReadinessWindow(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeSpecsAppliesExternalExplorationContainerBudget(t *testing.T) {
+	t.Setenv("NAVLAB_SIM_DISTRO", "")
+	t.Setenv("NAVLAB_SIM_IMAGE_TAG", "")
+	t.Setenv("NAVLAB_SIM_RUNTIME_IMAGE_TAG", "")
+	project := config.ProjectConfig{
+		Orchestration: config.OrchestrationConfig{
+			Runtime: config.OrchestrationRuntimeConfig{
+				Docker: config.DockerRuntimeConfig{WorkspaceContainerPath: "/workspace"},
+			},
+		},
+		Paths:       config.PathConfig{WorkspaceRoot: "."},
+		RosDomainID: "85",
+		Navlab: config.NavlabConfig{
+			Images: config.ImageCatalog{TagPolicy: "distro-latest"},
+		},
+		Images: map[string]config.Image{
+			"mavlink_router":    {Repository: "navlab/mavlink-router"},
+			"official_baseline": {Repository: "navlab/official-baseline"},
+		},
+	}
+	plan := helpers.ExecutionPlan{
+		TaskID:      "exploration",
+		DurationSec: 150,
+		ROSProbes: []helpers.ROSProbePlan{
+			{
+				HelperID:     "exploration-workflow",
+				Name:         "exploration_probe",
+				ScriptPath:   "exploration_probe.py",
+				OutputPath:   "exploration_probe.json",
+				RuntimeImage: "images.runtime",
+			},
+		},
+	}
+	runtimeConfig := config.TaskRuntimeConfig{
+		FCUController:   config.FCUControllerConfig{ReadinessTimeoutSec: 45},
+		ExplorationGate: config.ExplorationGateConfig{Strategy: "external", ExplorationWindowSec: 26},
+		Landing: config.LandingConfig{
+			ExplorationPolicy:        helpers.PolicyReturnHomeThenLand,
+			PreLandHoldSec:           2,
+			MaxReturnHomeDurationSec: 45,
+			MaxLandingDurationSec:    35,
+		},
+	}
+
+	bundle, err := BuildRuntimeSpecs(project, plan, t.TempDir(), runtimeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := probeByName(bundle.Probes, "exploration_probe")
+	if probe == nil || probe.TimeoutSec != 292 {
+		t.Fatalf("external exploration probe spec = %#v, want container timeout 292s", probe)
+	}
+}
+
 func TestBuildRuntimeSpecsMakesSlamHoverProbeDiagnosticOnly(t *testing.T) {
 	t.Setenv("NAVLAB_SIM_DISTRO", "")
 	t.Setenv("NAVLAB_SIM_IMAGE_TAG", "")
@@ -842,7 +896,7 @@ func TestRuntimeTaskDeadlineCoversExplorationCloseout(t *testing.T) {
 	plan := Plan{TaskID: "exploration", DurationSec: 150}
 	runtimeConfig := config.TaskRuntimeConfig{
 		FCUController:   config.FCUControllerConfig{ReadinessTimeoutSec: 45},
-		ExplorationGate: config.ExplorationGateConfig{ExplorationWindowSec: 26},
+		ExplorationGate: config.ExplorationGateConfig{Strategy: "external", ExplorationWindowSec: 26},
 		Landing: config.LandingConfig{
 			ExplorationPolicy:        helpers.PolicyReturnHomeThenLand,
 			PreLandHoldSec:           2,
@@ -850,10 +904,18 @@ func TestRuntimeTaskDeadlineCoversExplorationCloseout(t *testing.T) {
 			MaxLandingDurationSec:    35,
 		},
 	}
-	if got := RuntimeTaskDeadlineSec(plan, runtimeConfig); got != 178 {
-		t.Fatalf("RuntimeTaskDeadlineSec() = %v, want probe budget 168 + 10s watchdog margin", got)
+	if got := RuntimeTaskDeadlineSec(plan, runtimeConfig); got != 272 {
+		t.Fatalf("RuntimeTaskDeadlineSec() = %v, want external probe budget 262 + 10s watchdog margin", got)
 	}
-	if got := probeTimeoutSec("exploration_probe", plan.DurationSec); got != 180 {
-		t.Fatalf("exploration probe container timeout = %v, want duration + 30s", got)
+	if got := explorationProbeContainerTimeoutSec(runtimeConfig, plan.DurationSec); got != 292 {
+		t.Fatalf("exploration probe container timeout = %v, want probe budget 262 + 30s exit margin", got)
+	}
+	if got := explorationProbeContainerTimeoutSec(runtimeConfig, plan.DurationSec); got <= explorationSpec(runtimeConfig).ProbeTimeoutSec {
+		t.Fatalf("exploration probe container timeout = %v, must exceed in-script probe budget", got)
+	}
+
+	runtimeConfig.ExplorationGate.Strategy = "frontier_lite"
+	if got := RuntimeTaskDeadlineSec(plan, runtimeConfig); got != 178 {
+		t.Fatalf("frontier_lite RuntimeTaskDeadlineSec() = %v, want unchanged probe budget 168 + 10s watchdog margin", got)
 	}
 }

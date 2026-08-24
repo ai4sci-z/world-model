@@ -216,6 +216,9 @@ func GenerateRuntimeArtifacts(
 		}
 		generated = append(generated, GeneratedRuntimeArtifact{Type: "fcu_runtime_config", Path: path})
 		if err := writeGeneratedScript(artifactlayout.RuntimeScript(artifactDir, "fcu_controller_runtime.py"), func() (string, error) {
+			if plan.TaskID == "exploration" {
+				return helpers.FCUControllerRuntimeScript(spec, plan.DurationSec, explorationRuntimeServiceTimeoutSec(runtimeConfig))
+			}
 			return helpers.FCUControllerRuntimeScript(spec, plan.DurationSec)
 		}); err != nil {
 			return nil, err
@@ -307,7 +310,7 @@ func GenerateRuntimeArtifacts(
 		}
 		generated = append(generated, GeneratedRuntimeArtifact{Type: "exploration_runtime_config", Path: path})
 		if err := writeGeneratedScript(artifactlayout.RuntimeScript(artifactDir, "exploration_workflow_runtime.py"), func() (string, error) {
-			return helpers.ExplorationWorkflowRuntimeScript(spec, plan.DurationSec)
+			return helpers.ExplorationWorkflowRuntimeScript(spec, plan.DurationSec, explorationRuntimeServiceTimeoutSec(runtimeConfig))
 		}); err != nil {
 			return nil, err
 		}
@@ -900,7 +903,7 @@ func explorationSpec(runtimeConfig config.TaskRuntimeConfig) helpers.Exploration
 	}
 	// The probe starts with the runtime services, so its in-script wait must
 	// cover DDS discovery, FCU readiness, exploration, and the complete closeout.
-	configuredBudgetSec := 15.0 + readinessBudgetSec + exploration.ExplorationWindowSec + landing.PreLandHoldSec + landingBudgetSec
+	configuredBudgetSec := explorationDDSDiscoveryBudgetSec + readinessBudgetSec + explorationStageBudgetSec(runtimeConfig) + landing.PreLandHoldSec + landingBudgetSec
 	if configuredBudgetSec > spec.ProbeTimeoutSec {
 		spec.ProbeTimeoutSec = configuredBudgetSec
 	}

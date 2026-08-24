@@ -363,12 +363,17 @@ func WriteFCUControllerRuntimeConfig(path string, spec FCUControllerSpec) error 
 	return writeTOML(path, map[string]any{"fcu_controller": map[string]any{"runtime": spec}})
 }
 
-func FCUControllerRuntimeScript(spec FCUControllerSpec, durationSec float64) (string, error) {
+func FCUControllerRuntimeScript(spec FCUControllerSpec, durationSec float64, runtimeTimeoutSec ...float64) (string, error) {
 	if spec.ControlRoute == "" {
 		spec = DefaultFCUControllerSpec()
 	}
+	runtimeBudgetSec := durationSec + 30.0
+	if len(runtimeTimeoutSec) > 0 && runtimeTimeoutSec[0] > runtimeBudgetSec {
+		runtimeBudgetSec = runtimeTimeoutSec[0]
+	}
 	payload := map[string]any{
 		"duration_sec":                       durationSec,
+		"runtime_timeout_sec":                runtimeBudgetSec,
 		"control_route":                      spec.ControlRoute,
 		"mavlink_bootstrap_endpoint":         spec.MAVLinkBootstrap,
 		"mavlink_bootstrap_source_system":    spec.MAVLinkBootstrapSourceSystem,
@@ -1193,12 +1198,17 @@ func ExplorationProbeScript(spec ExplorationWorkflowSpec) (string, error) {
 	)
 }
 
-func ExplorationWorkflowRuntimeScript(spec ExplorationWorkflowSpec, durationSec float64) (string, error) {
+func ExplorationWorkflowRuntimeScript(spec ExplorationWorkflowSpec, durationSec float64, runtimeTimeoutSec ...float64) (string, error) {
 	if spec.Strategy == "" {
 		spec = DefaultExplorationWorkflowSpec()
 	}
+	runtimeBudgetSec := durationSec + 15.0
+	if len(runtimeTimeoutSec) > 0 && runtimeTimeoutSec[0] > runtimeBudgetSec {
+		runtimeBudgetSec = runtimeTimeoutSec[0]
+	}
 	payload, err := json.Marshal(map[string]any{
 		"duration_sec":             durationSec,
+		"runtime_timeout_sec":      runtimeBudgetSec,
 		"strategy":                 spec.Strategy,
 		"exploration_window_sec":   spec.ExplorationWindowSec,
 		"motion_speed_mps":         spec.MotionSpeedMPS,
