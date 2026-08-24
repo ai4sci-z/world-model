@@ -32,6 +32,7 @@ def main() -> int:
         "ready_since": 0.0,
         "completed_ms": 0,
         "completed_at": 0.0,
+        "completed_status": None,
         "last_intent": {},
         "landing_complete": False,
     }
@@ -113,7 +114,7 @@ def main() -> int:
         ready_elapsed = 0.0
         if state.get("controller_ready") and float(state.get("ready_since", 0.0) or 0.0) > 0.0:
             ready_elapsed = time.monotonic() - float(state.get("ready_since", 0.0) or 0.0)
-        status = exploration_status(state)
+        status = state.get("completed_status") or exploration_status(state)
         status_pub.publish(string_msg(status))
         publish_review_topics(goal_pub, coverage_pub, frontiers_pub, path_pub, markers_pub, state, status)
 
@@ -121,6 +122,10 @@ def main() -> int:
             if not state.get("completed_ms"):
                 state["completed_ms"] = int(time.time() * 1000)
                 state["completed_at"] = time.monotonic()
+                # Controller readiness intentionally drops when return-home
+                # starts. Freeze the measured exploration success so landing
+                # cannot revoke it and strand this finite service at deadline.
+                state["completed_status"] = dict(status)
             intent_pub.publish(string_msg(stop_intent(state, "complete")))
             if time.monotonic() - float(state.get("completed_at", 0.0) or 0.0) >= completed_hold_sec:
                 break
@@ -139,7 +144,7 @@ def main() -> int:
             intent_pub.publish(string_msg(stop_intent(state, "waiting_for_controller")))
         time.sleep(0.1)
 
-    final_status = exploration_status(state)
+    final_status = state.get("completed_status") or exploration_status(state)
     for _ in range(20):
         status_pub.publish(string_msg(final_status))
         intent_pub.publish(string_msg(stop_intent(state, "shutdown")))

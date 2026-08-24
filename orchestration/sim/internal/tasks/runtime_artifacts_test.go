@@ -936,6 +936,25 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 	if output, err := exec.Command("python3", "-m", "py_compile", artifactlayout.RuntimeScript(artifactDir, "fcu_controller_runtime.py")).CombinedOutput(); err != nil {
 		t.Fatalf("generated fcu controller does not compile: %v\n%s", err, output)
 	}
+	explorationScriptPath := artifactlayout.RuntimeScript(artifactDir, "exploration_workflow_runtime.py")
+	explorationScript, err := os.ReadFile(explorationScriptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(exploration_workflow_runtime.py) error = %v", err)
+	}
+	explorationText := string(explorationScript)
+	for _, expected := range []string{
+		`"completed_status": None`,
+		`status = state.get("completed_status") or exploration_status(state)`,
+		`state["completed_status"] = dict(status)`,
+		`final_status = state.get("completed_status") or exploration_status(state)`,
+	} {
+		if !strings.Contains(explorationText, expected) {
+			t.Fatalf("exploration workflow script missing success latch %q:\n%s", expected, explorationText)
+		}
+	}
+	if output, err := exec.Command("python3", "-m", "py_compile", explorationScriptPath).CombinedOutput(); err != nil {
+		t.Fatalf("generated exploration workflow does not compile: %v\n%s", err, output)
+	}
 }
 
 func TestExplorationSpecBudgetsProbeThroughLandingCloseout(t *testing.T) {
