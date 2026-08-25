@@ -683,11 +683,19 @@ def main() -> int:
         current_y = state.get("mavlink_local_y_m")
         base_x = float(current_x) if current_x is not None else float(state.get("local_setpoint_x_m", 0.0) or 0.0)
         base_y = float(current_y) if current_y is not None else float(state.get("local_setpoint_y_m", 0.0) or 0.0)
-        position_carrot, position_error = gbplanner_position_carrot(
-            payload,
-            current_north_m=base_x,
-            current_east_m=base_y,
-        )
+        # The normal GBPlanner contract is a body-FRD velocity intent. An
+        # absolute position carrot is a separate opt-in mode; enabling it for
+        # ordinary velocity intents applies map/NED alignment twice and can
+        # stall the first waypoint. Keep the helper available for explicit
+        # callers without changing the default velocity path.
+        position_carrot = None
+        position_error = None
+        if payload.get("position_target_mode") == "absolute_carrot":
+            position_carrot, position_error = gbplanner_position_carrot(
+                payload,
+                current_north_m=base_x,
+                current_east_m=base_y,
+            )
         if position_error is not None:
             state["mavlink_setpoint_error"] = position_error
             return
