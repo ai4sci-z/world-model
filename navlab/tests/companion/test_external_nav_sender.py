@@ -20,8 +20,8 @@ from navlab.real.companion.nodes.external_nav import (
 # being installed. Without it the module falls back to mavlink=None and the
 # send path crashes on constant lookup — an environment artifact, not the
 # behavior under test. Inject the MAVLink spec constants
-# (MAV_FRAME_LOCAL_FRD=20, MAV_FRAME_BODY_FRD=12, MAV_ESTIMATOR_TYPE_VIO=3)
-# only in that case; with pymavlink present this is a no-op. Deliberately not
+# (frames, estimator type, and requested stream message IDs) only in that case;
+# with the full ROS/MAVLink import present this is a no-op. Deliberately not
 # a pytest fixture: the companion container has pymavlink but no pytest, and
 # the tests must stay runnable there too.
 if external_nav_module.mavlink is None:
@@ -29,6 +29,9 @@ if external_nav_module.mavlink is None:
         MAV_FRAME_LOCAL_FRD=20,
         MAV_FRAME_BODY_FRD=12,
         MAV_ESTIMATOR_TYPE_VIO=3,
+        MAVLINK_MSG_ID_HEARTBEAT=0,
+        MAVLINK_MSG_ID_ATTITUDE=30,
+        MAVLINK_MSG_ID_LOCAL_POSITION_NED=32,
     )
 
 
