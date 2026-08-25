@@ -15,6 +15,8 @@ def main() -> int:
     from nav_msgs.msg import Odometry
     from sensor_msgs.msg import Imu, LaserScan, Range
     from std_msgs.msg import String
+
+    from navlab.common.companion.setpoint import gbplanner_position_carrot
     from navlab.common.companion.mission.evidence.landing import (
         LandingEvidenceRecorder,
         landing_touchdown_candidate,
@@ -681,6 +683,30 @@ def main() -> int:
         current_y = state.get("mavlink_local_y_m")
         base_x = float(current_x) if current_x is not None else float(state.get("local_setpoint_x_m", 0.0) or 0.0)
         base_y = float(current_y) if current_y is not None else float(state.get("local_setpoint_y_m", 0.0) or 0.0)
+        position_carrot, position_error = gbplanner_position_carrot(
+            payload,
+            current_north_m=base_x,
+            current_east_m=base_y,
+        )
+        if position_error is not None:
+            state["mavlink_setpoint_error"] = position_error
+            return
+
+        hold_requested = (
+            not bool(payload.get("ok", False))
+            and abs(vx_mps) < 1e-9
+            and abs(vy_mps) < 1e-9
+            and abs(yaw_rate_radps) < 1e-9
+        )
+        # A revoked or invalid exploration lease must stop chasing the previous
+        # position target. Re-anchor the hold at the latest FCU position.
+        if hold_requested:
+            state["local_setpoint_x_m"] = base_x
+            state["local_setpoint_y_m"] = base_y
+            state["setpoint_anchor_initialized"] = True
+        elif position_carrot is not None:
+            state["local_setpoint_x_m"], state["local_setpoint_y_m"] = position_carrot
+            state["setpoint_anchor_initialized"] = True
         # M5 帧闭环(2026-07-28 bag 实测):intent 契约语义=机体系(FRD,x前 y右;
         # 参考实现 frontier_lite 即"前进+转弯";当前全部生产者 y≈0)。此前本函数把
         # (vx,vy) 当世界 NED 直接积分,而 cmd_vel 路径又按机体系下发——yaw≈180° 时
@@ -699,7 +725,9 @@ def main() -> int:
         # 重设目标 → 误差恒为 v×前瞻、飞控持续加速;飞机冲过头后目标又跟着前移 → 正反馈发散
         # (min_move2 实测:指令 0.1m/s,实际窜到 0.48m/s、侧漂 0.73m)。
         # 改为累积积分:目标以指令速度匀速推进,首拍锚定当前位置,之后不再跟随实测。
-        if not state.get("setpoint_anchor_initialized"):
+        if hold_requested or position_carrot is not None:
+            pass
+        elif not state.get("setpoint_anchor_initialized"):
             state["local_setpoint_x_m"] = base_x
             state["local_setpoint_y_m"] = base_y
             state["setpoint_anchor_initialized"] = True

@@ -431,6 +431,9 @@ func TestRuntimeSpecsGenerateScriptsAndConfigs(t *testing.T) {
 		!strings.Contains(script, "mavutil.mavlink.MAV_FRAME_LOCAL_NED") ||
 		!strings.Contains(script, "mavlink_setpoint_count") ||
 		!strings.Contains(script, "refresh_mavlink_state(master)") ||
+		!strings.Contains(script, "gbplanner_position_carrot") ||
+		!strings.Contains(script, `state["mavlink_setpoint_error"] = position_error`) ||
+		!strings.Contains(script, `state["local_setpoint_x_m"] = base_x`) ||
 		!strings.Contains(script, "setpoint_lookahead_sec") {
 		t.Fatalf("controller script missing MAVLink local-position setpoint controls:\n%s", script)
 	}
