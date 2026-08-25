@@ -59,7 +59,12 @@ def is_string_topic(topic: str) -> bool:
 
 def effective_sample_ok(topic: str, sample: dict, samples: dict) -> bool:
     parsed = sample.get("parsed") or {}
-    if sample.get("ok", False) and ("ok" not in parsed or bool(parsed.get("ok", False))):
+    # A received status payload is valid transport evidence even when the
+    # component reports a failed business state (`ok: false`).  The gate must
+    # consume that payload and preserve its real blockers (for example
+    # `slam_frozen`); classifying it as `topic_sample_missing` destroys the
+    # terminal failure evidence and makes probe diagnostics misleading.
+    if sample.get("ok", False):
         return True
     if topic == SPEC.get("SlamOdomTopic"):
         return slam_status_has_odom_evidence(samples.get(SPEC.get("SlamStatusTopic", ""), {}))

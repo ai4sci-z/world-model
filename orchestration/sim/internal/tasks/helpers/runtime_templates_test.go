@@ -164,6 +164,7 @@ func TestRuntimeScriptTemplatesRenderMissionAndNavigationWrappers(t *testing.T) 
 				`sample["failure_kind"] = "sample_stdout_present_timeout"`,
 				`"failure_kind": "topic_type_missing"`,
 				`sample["failure_kind"] = "topic_sample_missing"`,
+				"if sample.get(\"ok\", False):",
 			},
 		},
 		{
