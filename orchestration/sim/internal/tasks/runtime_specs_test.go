@@ -234,8 +234,8 @@ func TestBuildRuntimeSpecsAppliesExternalExplorationContainerBudget(t *testing.T
 		t.Fatal(err)
 	}
 	probe := probeByName(bundle.Probes, "exploration_probe")
-	if probe == nil || probe.TimeoutSec != 292 {
-		t.Fatalf("external exploration probe spec = %#v, want container timeout 292s", probe)
+	if probe == nil || probe.TimeoutSec != 295 {
+		t.Fatalf("external exploration probe spec = %#v, want container timeout 295s", probe)
 	}
 }
 
@@ -904,11 +904,11 @@ func TestRuntimeTaskDeadlineCoversExplorationCloseout(t *testing.T) {
 			MaxLandingDurationSec:    35,
 		},
 	}
-	if got := RuntimeTaskDeadlineSec(plan, runtimeConfig); got != 272 {
-		t.Fatalf("RuntimeTaskDeadlineSec() = %v, want external probe budget 262 + 10s watchdog margin", got)
+	if got := RuntimeTaskDeadlineSec(plan, runtimeConfig); got != 275 {
+		t.Fatalf("RuntimeTaskDeadlineSec() = %v, want external probe budget 265 + 10s watchdog margin", got)
 	}
-	if got := explorationProbeContainerTimeoutSec(runtimeConfig, plan.DurationSec); got != 292 {
-		t.Fatalf("exploration probe container timeout = %v, want probe budget 262 + 30s exit margin", got)
+	if got := explorationProbeContainerTimeoutSec(runtimeConfig, plan.DurationSec); got != 295 {
+		t.Fatalf("exploration probe container timeout = %v, want probe budget 265 + 30s exit margin", got)
 	}
 	if got := explorationProbeContainerTimeoutSec(runtimeConfig, plan.DurationSec); got <= explorationSpec(runtimeConfig).ProbeTimeoutSec {
 		t.Fatalf("exploration probe container timeout = %v, must exceed in-script probe budget", got)

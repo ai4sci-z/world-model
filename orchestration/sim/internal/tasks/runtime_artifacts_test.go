@@ -984,13 +984,13 @@ func TestExplorationSpecBudgetsProbeThroughLandingCloseout(t *testing.T) {
 		},
 	}
 	spec := explorationSpec(runtimeConfig)
-	if spec.ProbeTimeoutSec != 262 {
-		t.Fatalf("external exploration probe timeout = %v, want DDS + readiness + 120s external exploration + hold + return + landing budget 262", spec.ProbeTimeoutSec)
+	if spec.ProbeTimeoutSec != 265 {
+		t.Fatalf("external exploration probe timeout = %v, want DDS + readiness + 123s external exploration + hold + return + landing budget 265", spec.ProbeTimeoutSec)
 	}
-	if got := explorationRuntimeServiceTimeoutSec(runtimeConfig); got != 267 {
+	if got := explorationRuntimeServiceTimeoutSec(runtimeConfig); got != 270 {
 		t.Fatalf("external exploration runtime timeout = %v, want probe budget + 5s publisher grace", got)
 	}
-	if got := explorationProbeContainerTimeoutSec(runtimeConfig, 150); got != 292 {
+	if got := explorationProbeContainerTimeoutSec(runtimeConfig, 150); got != 295 {
 		t.Fatalf("external exploration probe container timeout = %v, want probe budget + 30s exit margin", got)
 	}
 

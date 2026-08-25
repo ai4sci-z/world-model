@@ -4,7 +4,9 @@ import "navlab/orchestration-sim/internal/config"
 
 const (
 	explorationDDSDiscoveryBudgetSec    = 15.0
-	externalExplorationStageBudgetSec   = 120.0
+	// The external adapter keeps the 120 s active window spatially strict and
+	// allows 3 s for the 4 Hz controller to observe a final in-radius sample.
+	externalExplorationStageBudgetSec   = 123.0
 	explorationRuntimePublisherGraceSec = 5.0
 	explorationWatchdogMarginSec        = 10.0
 	explorationProbeContainerMarginSec  = 30.0
