@@ -11,6 +11,8 @@ PROBE_TIMEOUT_SEC = max(1.0, float(SPEC.get("probe_timeout_sec", SPEC.get("Probe
 TOPIC_SAMPLE_TIMEOUT_SEC = max(0.5, min(2.0, PROBE_TIMEOUT_SEC / 6.0))
 STRING_BATCH_TIMEOUT_SEC = max(0.5, min(3.0, PROBE_TIMEOUT_SEC / 6.0))
 STRING_READY_TIMEOUT_SEC = max(STRING_BATCH_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
+SLAM_STATUS_TOPIC = SPEC.get("SlamStatusTopic", "")
+SLAM_READY_WINDOW_SEC = max(0.1, float(SPEC.get("SlamReadyWindowSec", 1.0)))
 
 def main() -> int:
     samples = sample_string_topics([topic for topic in TOPICS if is_string_topic(topic)])
@@ -62,6 +64,22 @@ def effective_sample_ok(topic: str, sample: dict, samples: dict) -> bool:
     if topic == SPEC.get("SlamOdomTopic"):
         return slam_status_has_odom_evidence(samples.get(SPEC.get("SlamStatusTopic", ""), {}))
     return False
+
+def slam_status_is_ready(parsed: dict | None) -> bool:
+    if not isinstance(parsed, dict) or parsed.get("ready") is not True:
+        return False
+    output = parsed.get("output") or {}
+    try:
+        odom_count = int(output.get("odom_count", parsed.get("odom_samples", 0)) or 0)
+    except Exception:
+        odom_count = 0
+    if odom_count <= 0:
+        return False
+    for key in ("scan", "imu", "tf"):
+        component = parsed.get(key)
+        if isinstance(component, dict) and "fresh" in component and component.get("fresh") is not True:
+            return False
+    return True
 
 def slam_status_has_odom_evidence(sample: dict) -> bool:
     parsed = sample.get("parsed") or {}
@@ -292,7 +310,7 @@ def sample_string_topics(topics: list[str]) -> dict:
     except Exception:
         return {}
 
-    holders = {topic: {"data": None, "parsed": None, "best_data": None, "best_parsed": None, "started": time.time()} for topic in topics}
+    holders = {topic: {"data": None, "parsed": None, "best_data": None, "best_parsed": None, "ready_since": None, "started": time.time()} for topic in topics}
     started = time.time()
     try:
         rclpy.init(args=None)
@@ -312,7 +330,15 @@ def sample_string_topics(topics: list[str]) -> dict:
             holder["data"] = msg.data
             parsed = parse_json_payload(msg.data)
             holder["parsed"] = parsed
-            if string_payload_ok(parsed):
+            if topic == SLAM_STATUS_TOPIC:
+                if slam_status_is_ready(parsed):
+                    holder["ready_since"] = holder["ready_since"] or time.monotonic()
+                    if time.monotonic() - holder["ready_since"] >= SLAM_READY_WINDOW_SEC:
+                        holder["best_data"] = msg.data
+                        holder["best_parsed"] = parsed
+                else:
+                    holder["ready_since"] = None
+            elif string_payload_ok(parsed):
                 holder["best_data"] = msg.data
                 holder["best_parsed"] = parsed
         return on_msg
@@ -321,7 +347,7 @@ def sample_string_topics(topics: list[str]) -> dict:
     deadline = time.monotonic() + STRING_READY_TIMEOUT_SEC
     while rclpy.ok() and time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.1)
-        if all(string_holder_ready(holder) for holder in holders.values()):
+        if all(string_holder_ready(topic, holder) for topic, holder in holders.items()):
             break
     subscriptions.clear()
     node.destroy_node()
@@ -331,7 +357,7 @@ def sample_string_topics(topics: list[str]) -> dict:
         data = holder.get("best_data") or holder.get("data")
         parsed = holder.get("best_parsed") or holder.get("parsed")
         sample = {
-            "ok": string_holder_ok(holder),
+            "ok": string_holder_ok(topic, holder),
             "return_code": 0 if data is not None else 124,
             "latency_sec": round(time.time() - float(holder.get("started", started)), 3),
         }
@@ -343,16 +369,18 @@ def sample_string_topics(topics: list[str]) -> dict:
         samples[topic] = sample
     return samples
 
-def string_holder_ok(holder: dict) -> bool:
+def string_holder_ok(topic: str, holder: dict) -> bool:
+    if topic == SLAM_STATUS_TOPIC:
+        return holder.get("best_data") is not None
     if holder.get("best_data") is not None:
         return True
     data = holder.get("data")
     parsed = holder.get("parsed")
     return data is not None and string_payload_ok(parsed)
 
-def string_holder_ready(holder: dict) -> bool:
+def string_holder_ready(topic: str, holder: dict) -> bool:
     """A terminal task sample ends waiting but remains an unsuccessful sample."""
-    if string_holder_ok(holder):
+    if string_holder_ok(topic, holder):
         return True
     parsed = holder.get("parsed")
     return isinstance(parsed, dict) and parsed.get("terminal") is True

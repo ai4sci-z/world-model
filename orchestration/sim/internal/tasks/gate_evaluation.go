@@ -1294,7 +1294,11 @@ func summarizeHoverXYAlignment(path string) (map[string]any, error) {
 	sources := []sourceSpec{
 		{key: "gazebo_model_odometry", topic: helpers.DiagnosticGazeboModelOdometryTopic, kind: "odometry", compareXY: true, hardGate: false},
 		{key: "fcu_local_position_pose", topic: "/navlab/fcu/local_position_pose", kind: "pose_stamped", compareXY: true, hardGate: true},
-		{key: "external_nav_odom_candidate", topic: "/external_nav/odom_candidate", kind: "odometry", compareXY: true, hardGate: true},
+		// This selector candidate is a legacy correction-measurement diagnostic.
+		// It is not the current ExternalNav input (the runtime uses /slam/odom),
+		// so its anchor-minus-measurement sign is not comparable to pose topics
+		// and must never hard-block the live route.
+		{key: "external_nav_odom_candidate", topic: "/external_nav/odom_candidate", kind: "odometry", compareXY: true, hardGate: false},
 		{key: "slam_odom_corrected", topic: "/slam/odom_corrected", kind: "odometry", compareXY: true, hardGate: true},
 		{key: "external_nav_odom", topic: "/external_nav/odom", kind: "odometry", compareXY: true, hardGate: true},
 	}

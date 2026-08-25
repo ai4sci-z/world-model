@@ -980,18 +980,35 @@ func TestSummarizeHoverXYAlignmentIncludesGazeboModelEvidence(t *testing.T) {
 
 func TestSummarizeHoverXYAlignmentFlagsDirectionMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hover_xy_alignment_bad_rosbag_0.mcap")
-	writeHoverXYAlignmentMCAP(t, path, true)
+	writeHoverXYAlignmentMCAPWithMode(t, path, "candidate_only_mismatch")
+
+	summary, err := summarizeHoverXYAlignment(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := summary["ok"].(bool); !ok {
+		t.Fatalf("xy alignment = %#v, legacy candidate mismatch must be diagnostic-only", summary)
+	}
+	auditBlockers := testStringSliceFromAny(summary["audit_blockers"])
+	if !stringSliceContains(auditBlockers, "hover_xy_alignment_direction_mismatch:external_nav_odom_candidate__slam_odom_corrected") {
+		t.Fatalf("audit_blockers = %#v, want legacy candidate mismatch", auditBlockers)
+	}
+}
+
+func TestSummarizeHoverXYAlignmentKeepsRuntimeMismatchAsHardBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hover_xy_alignment_runtime_bad_rosbag_0.mcap")
+	writeHoverXYAlignmentMCAPWithMode(t, path, "estimate_mismatch")
 
 	summary, err := summarizeHoverXYAlignment(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ok, _ := summary["ok"].(bool); ok {
-		t.Fatalf("xy alignment = %#v, want mismatch", summary)
+		t.Fatalf("xy alignment = %#v, active ExternalNav mismatch must block", summary)
 	}
 	blockers := testStringSliceFromAny(summary["blockers"])
-	if !stringSliceContains(blockers, "hover_xy_alignment_direction_mismatch:external_nav_odom_candidate__slam_odom_corrected") {
-		t.Fatalf("blockers = %#v, want external nav candidate mismatch", blockers)
+	if !stringSliceContains(blockers, "hover_xy_alignment_direction_mismatch:slam_odom_corrected__external_nav_odom") {
+		t.Fatalf("blockers = %#v, want active runtime mismatch", blockers)
 	}
 }
 
@@ -1307,10 +1324,15 @@ func writeHoverXYAlignmentMCAPWithMode(t *testing.T, path string, mode string) {
 		gazeboY := dy
 		externalX := dx
 		externalY := dy
+		candidateX := externalX
+		candidateY := externalY
 		switch mode {
 		case "estimate_mismatch":
 			externalX = -dx
 			externalY = -dy
+		case "candidate_only_mismatch":
+			candidateX = -dx
+			candidateY = -dy
 		case "gazebo_only_mismatch":
 			gazeboX = -dx
 			gazeboY = -dy
@@ -1319,7 +1341,7 @@ func writeHoverXYAlignmentMCAPWithMode(t *testing.T, path string, mode string) {
 		writeMsg(3, uint64(idx), gateTestPoseStampedCDR(dy*0.98, -dx*0.98, 0))
 		writeMsg(4, uint64(idx), gateTestOdometryCDR(externalX, externalY, 0))
 		writeMsg(5, uint64(idx), gateTestOdometryCDR(dx*1.02, dy*1.02, 0))
-		writeMsg(6, uint64(idx), gateTestOdometryCDR(externalX, externalY, 0))
+		writeMsg(6, uint64(idx), gateTestOdometryCDR(candidateX, candidateY, 0))
 	}
 	writeMsg(2, 12, gateTestStringCDR(`{"phase":"hover_hold"}`))
 	if err := writer.Close(); err != nil {

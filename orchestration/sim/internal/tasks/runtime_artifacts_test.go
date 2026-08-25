@@ -747,9 +747,9 @@ func assertProbeScriptRetriesTopicEcho(t *testing.T, path string) {
 		"from rosidl_runtime_py.utilities import get_message",
 		`getattr(msg, "data", None)`,
 		"parse_json_payload(data)",
-		"def string_holder_ready(holder: dict) -> bool:",
+		"def string_holder_ready(topic: str, holder: dict) -> bool:",
 		`parsed.get("terminal") is True`,
-		`"ok": string_holder_ok(holder)`,
+		`"ok": string_holder_ok(topic, holder)`,
 		`"attempts": attempts`,
 	} {
 		if !strings.Contains(text, want) {

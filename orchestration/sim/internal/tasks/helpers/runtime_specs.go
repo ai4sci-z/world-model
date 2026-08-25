@@ -194,9 +194,15 @@ func StartupReadinessProbeScript(spec SlamHoverSpec) (string, error) {
 			"/height/estimate",
 			"/height/status",
 			spec.ExternalNavStatusTopic,
+			spec.SlamStatusTopic,
+			spec.SlamOdomTopic,
 		},
 		nil,
-		map[string]any{"probe_timeout_sec": 5.0},
+		map[string]any{
+			"probe_timeout_sec":  60.0,
+			"SlamStatusTopic":    spec.SlamStatusTopic,
+			"SlamReadyWindowSec": 1.0,
+		},
 	)
 }
 
@@ -475,7 +481,8 @@ type FrameContractSpec struct {
 	// probe. Matching a late-joining subscription to the ArduPilot micro-ROS
 	// agent's publishers takes ~30s of DDS endpoint discovery (measured), so
 	// the default 8s template budget misses /ap/v1/pose/filtered every time.
-	ProbeTimeoutSec float64
+	ProbeTimeoutSec    float64
+	SlamReadyWindowSec float64
 }
 
 func DefaultFrameContractSpec() FrameContractSpec {
@@ -515,6 +522,7 @@ func DefaultFrameContractSpec() FrameContractSpec {
 		ProbeTimeoutSec:         90.0, // was 45: micro-ROS agent endpoint matching for a
 		// late-joining subscription was measured at ~29s in isolation and at 48.96s
 		// under a fuller participant load, so 45s intermittently starved the wait.
+		SlamReadyWindowSec: 1.0,
 	}
 }
 
