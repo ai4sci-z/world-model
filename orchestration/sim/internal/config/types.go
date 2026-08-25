@@ -443,6 +443,8 @@ type MotionGateConfig struct {
 type ExplorationGateConfig struct {
 	RosbagProfile             string  `mapstructure:"rosbag_profile"`
 	Strategy                  string  `mapstructure:"strategy"`
+	ExternalRuntimeRoot       string  `mapstructure:"external_runtime_root"`
+	ExternalRuntimeImageRef   string  `mapstructure:"external_runtime_image_ref"`
 	SlamOdomTopic             string  `mapstructure:"slam_odom_topic"`
 	SlamStatusTopic           string  `mapstructure:"slam_status_topic"`
 	ExternalNavStatusTopic    string  `mapstructure:"external_nav_status_topic"`

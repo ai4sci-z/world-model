@@ -893,7 +893,7 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		`takeoff_min_height_m`,
 		`takeoff_min_height_ratio`,
 		`target_min = max(min_height_m, altitude_m * min_height_ratio)`,
-		`def send_mavlink_local_position_setpoint(payload: dict) -> None:`,
+		`def send_mavlink_local_position_setpoint(payload: dict, *, source: str) -> None:`,
 		`master.mav.set_position_target_local_ned_send`,
 		`mavutil.mavlink.MAV_FRAME_LOCAL_NED`,
 		`mavlink_setpoint_count`,
@@ -914,9 +914,20 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 		`state["landing_phase"] = "returning_home"`,
 		`state["return_setpoint_ned"] = dict(state["landing_anchor_ned"])`,
 		`return_speed_mps = min(0.20, max(0.05, float(SPEC.get("motion_speed_mps", 0.10) or 0.10)))`,
-		`if lead > max_lead_m:`,
+		`# Return-home is an absolute LOCAL_NED correction.`,
 		`state["mavlink_landed_state"] = int(msg.landed_state)`,
 		`state["mavlink_armed"] = bool(`,
+		`send_mavlink_local_position_setpoint(payload, source="exploration_intent")`,
+		`state.get("landing_phase", "idle") == "idle" and not exploration_intent_is_fresh(now_monotonic)`,
+		`send_mavlink_position_target(target, source="return_home")`,
+		`send_mavlink_position_target(target, source="pre_land_hold")`,
+		`if msg_type == "STATUSTEXT":`,
+		`handle_mavlink_statustext(`,
+		`state["crash_detected"] = True`,
+		`del crash_statustext[:-20]`,
+		`fail_landing("crash_detected")`,
+		`ready = phase == "complete" and not crash_detected`,
+		`"crash_detected": crash_detected`,
 		`min_accepted_goals = max(configured_min_goals, reported_min_goals)`,
 		`min_path_length_m = max(configured_min_path_m, reported_min_path_m)`,
 		`completed = metrics_valid and payload.get("ok") is True and (`,
@@ -943,8 +954,79 @@ func TestFCUControllerRuntimeScriptKeepsSubscriptionsAlive(t *testing.T) {
 	if strings.Contains(text, `"state": "hover_hold" if ready`) {
 		t.Fatalf("fcu controller must not alias controller readiness to hover_hold:\n%s", text)
 	}
-	if output, err := exec.Command("python3", "-m", "py_compile", artifactlayout.RuntimeScript(artifactDir, "fcu_controller_runtime.py")).CombinedOutput(); err != nil {
+	controllerScriptPath := artifactlayout.RuntimeScript(artifactDir, "fcu_controller_runtime.py")
+	if output, err := exec.Command("python3", "-m", "py_compile", controllerScriptPath).CombinedOutput(); err != nil {
 		t.Fatalf("generated fcu controller does not compile: %v\n%s", err, output)
+	}
+	crashGateProbe := fmt.Sprintf(`
+import importlib.util
+
+spec = importlib.util.spec_from_file_location("generated_fcu_controller", %q)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+class LandingEvidence:
+    def descent_profile(self, **kwargs):
+        return {"ok": True}
+
+ingestion_state = {
+    "crash_detected": False,
+    "mavlink_crash_statustext": [],
+    "landing_failure_blockers": [],
+    "landing_phase": "complete",
+}
+def fail_landing(blocker):
+    ingestion_state["landing_phase"] = "failed"
+    if blocker not in ingestion_state["landing_failure_blockers"]:
+        ingestion_state["landing_failure_blockers"].append(blocker)
+
+handled = module.handle_mavlink_statustext(
+    ingestion_state,
+    severity=6,
+    text="Land complete",
+    fail_landing=fail_landing,
+    indicates_crash=lambda text: "Crash:" in text,
+)
+assert handled is False, ingestion_state
+assert ingestion_state["landing_phase"] == "complete", ingestion_state
+for index in range(25):
+    handled = module.handle_mavlink_statustext(
+        ingestion_state,
+        severity=0,
+        text=f"Crash: injected {index}\x00",
+        fail_landing=fail_landing,
+        indicates_crash=lambda text: "Crash:" in text,
+    )
+    assert handled is True, ingestion_state
+assert ingestion_state["crash_detected"] is True, ingestion_state
+assert ingestion_state["landing_phase"] == "failed", ingestion_state
+assert ingestion_state["landing_failure_blockers"] == ["crash_detected"], ingestion_state
+assert len(ingestion_state["mavlink_crash_statustext"]) == 20, ingestion_state
+assert ingestion_state["mavlink_crash_statustext"][0]["text"] == "Crash: injected 5", ingestion_state
+
+base_state = {
+    "landing_phase": "complete",
+    "crash_detected": False,
+    "mavlink_armed": False,
+    "landing_evidence": LandingEvidence(),
+}
+completed = module.landing_status(dict(base_state))
+assert completed["ok"] is True, completed
+assert completed["state"] == "landing_complete", completed
+
+crashed_state = dict(base_state)
+crashed_state["crash_detected"] = True
+crashed_state["mavlink_crash_statustext"] = [
+    {"severity": 0, "text": "Crash: Disarming: AngErr=42>30"},
+]
+crashed = module.landing_status(crashed_state)
+assert crashed["ok"] is False, crashed
+assert crashed["state"] != "landing_complete", crashed
+assert "crash_detected" in crashed["blockers"], crashed
+assert crashed["mavlink_crash_statustext"] == crashed_state["mavlink_crash_statustext"], crashed
+`, controllerScriptPath)
+	if output, err := exec.Command("python3", "-c", crashGateProbe).CombinedOutput(); err != nil {
+		t.Fatalf("generated fcu controller crash gate probe failed: %v\n%s", err, output)
 	}
 	explorationScriptPath := artifactlayout.RuntimeScript(artifactDir, "exploration_workflow_runtime.py")
 	explorationScript, err := os.ReadFile(explorationScriptPath)

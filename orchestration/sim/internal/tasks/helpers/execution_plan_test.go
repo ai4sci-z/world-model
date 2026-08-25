@@ -426,7 +426,21 @@ func TestRuntimeSpecsGenerateScriptsAndConfigs(t *testing.T) {
 		!strings.Contains(script, "def publish_hold_cmd_vel()") {
 		t.Fatalf("controller script missing stable hover completion controls:\n%s", script)
 	}
-	if !strings.Contains(script, "def send_mavlink_local_position_setpoint(payload: dict) -> None:") ||
+	for _, expected := range []string{
+		`"last_setpoint_intent_monotonic": 0.0`,
+		`state["last_setpoint_intent_monotonic"] = time.monotonic()`,
+		"def exploration_intent_is_fresh(now: float) -> bool:",
+		`if state.get("landing_phase", "idle") == "idle" and not exploration_intent_is_fresh(now_monotonic):`,
+		`send_mavlink_local_position_setpoint(payload, source="exploration_intent")`,
+		`state.get("landing_phase", "idle") == "idle" and not exploration_intent_is_fresh(now_monotonic)`,
+		`send_mavlink_position_target(target, source="return_home")`,
+		`send_mavlink_position_target(target, source="pre_land_hold")`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("controller script must avoid overriding fresh exploration intents %q:\n%s", expected, script)
+		}
+	}
+	if !strings.Contains(script, "def send_mavlink_local_position_setpoint(payload: dict, *, source: str) -> None:") ||
 		!strings.Contains(script, "master.mav.set_position_target_local_ned_send") ||
 		!strings.Contains(script, "mavutil.mavlink.MAV_FRAME_LOCAL_NED") ||
 		!strings.Contains(script, "mavlink_setpoint_count") ||
@@ -444,13 +458,30 @@ func TestRuntimeSpecsGenerateScriptsAndConfigs(t *testing.T) {
 		`state["landing_phase"] = "returning_home"`,
 		`state["return_setpoint_ned"] = dict(state["landing_anchor_ned"])`,
 		`return_speed_mps = min(0.20, max(0.05, float(SPEC.get("motion_speed_mps", 0.10) or 0.10)))`,
-		`if lead > max_lead_m:`,
+		`# Return-home is an absolute LOCAL_NED correction.`,
 		`state["mavlink_armed"] = bool(`,
 		`state["mavlink_landed_state"] = int(msg.landed_state)`,
 		`and state.get("land_mode_seen", False)`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("controller script missing real landing FSM evidence %q:\n%s", expected, script)
+		}
+	}
+	for _, expected := range []string{
+		"def handle_mavlink_statustext(state: dict, *, severity: int, text: str, fail_landing, indicates_crash) -> bool:",
+		"from navlab.common.companion.mission.runtime_state import statustext_indicates_crash",
+		`"crash_detected": False`,
+		`"mavlink_crash_statustext": []`,
+		`if msg_type == "STATUSTEXT":`,
+		`handle_mavlink_statustext(`,
+		`state["crash_detected"] = True`,
+		`del crash_statustext[:-20]`,
+		`fail_landing("crash_detected")`,
+		`ready = phase == "complete" and not crash_detected`,
+		`"crash_detected": crash_detected`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("controller script must fail closed on MAVLink crash STATUSTEXT %q:\n%s", expected, script)
 		}
 	}
 	if !strings.Contains(script, `takeoff_min_height_m`) ||

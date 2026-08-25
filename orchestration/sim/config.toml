@@ -94,6 +94,10 @@ context = "."
 target = "navlab-official-baseline"
 repository = "navlab/official-baseline"
 
+[navlab.images.gbplanner_stack]
+group = "external-runtime"
+repository = "gbplanner_stack:jazzy"
+
 [landing]
 enabled = true
 default_policy = "land_in_place"

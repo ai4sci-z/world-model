@@ -30,7 +30,10 @@ if external_nav_module.mavlink is None:
 
 def _sender_for_stream_requests() -> tuple[MavlinkExternalNavSender, list]:
     sender = MavlinkExternalNavSender.__new__(MavlinkExternalNavSender)
+    sender._roll_pitch_source = "fcu"
     sender._use_fcu_roll_pitch = True
+    sender._align_yaw_to_fcu = False
+    sender._use_fcu_yaw = False
     sender._local_position_pose_pub = object()
     sender._target_system = 1
     sender._target_component = 1

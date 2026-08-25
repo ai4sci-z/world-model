@@ -142,12 +142,18 @@ func TestBuildRuntimeSpecsFromExecutionPlan(t *testing.T) {
 		"--status-topic /mavlink_external_nav/status",
 		"--local-position-pose-topic /navlab/fcu/local_position_pose",
 		"--max-local-position-age-ms 1000",
-		"--max-horizontal-speed-mps 0.25",
+		"--max-horizontal-speed-mps 0",
 		"--max-yaw-rate-radps 0.6",
+		"--roll-pitch-source fcu",
+		"--no-align-yaw-to-fcu",
+		"--no-use-fcu-yaw",
 	} {
 		if !strings.Contains(externalNavCommand, expected) {
 			t.Fatalf("external nav command = %q, want %q", externalNavCommand, expected)
 		}
+	}
+	if strings.Contains(externalNavCommand, " --align-yaw-to-fcu ") || strings.Contains(externalNavCommand, " --use-fcu-yaw ") {
+		t.Fatalf("external nav command must preserve SLAM ENU->NED yaw; FCU yaw override erases the physical initial heading: %q", externalNavCommand)
 	}
 	if official.Env["ROS_DISTRO"] != "humble" || sensor.Env["ROS_DISTRO"] != "" {
 		t.Fatalf("runtime distro env official=%#v sensor=%#v", official.Env, sensor.Env)
@@ -189,6 +195,19 @@ func TestBuildRuntimeSpecsAppliesExternalExplorationContainerBudget(t *testing.T
 	t.Setenv("NAVLAB_SIM_DISTRO", "")
 	t.Setenv("NAVLAB_SIM_IMAGE_TAG", "")
 	t.Setenv("NAVLAB_SIM_RUNTIME_IMAGE_TAG", "")
+	gbplannerRoot := t.TempDir()
+	for _, relative := range []string{
+		"ros2_port/wm_mapping",
+		"ros2_port/src/gbplanner_node/config",
+		"ros2_port/adapter",
+	} {
+		if err := os.MkdirAll(filepath.Join(gbplannerRoot, filepath.FromSlash(relative)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(gbplannerRoot, "ros2_port/wm_mapping/gbp_stack.sh"), []byte("#!/bin/bash\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	project := config.ProjectConfig{
 		Orchestration: config.OrchestrationConfig{
 			Runtime: config.OrchestrationRuntimeConfig{
@@ -203,6 +222,7 @@ func TestBuildRuntimeSpecsAppliesExternalExplorationContainerBudget(t *testing.T
 		Images: map[string]config.Image{
 			"mavlink_router":    {Repository: "navlab/mavlink-router"},
 			"official_baseline": {Repository: "navlab/official-baseline"},
+			"gbplanner_stack":   {Repository: "gbplanner_stack:jazzy"},
 		},
 	}
 	plan := helpers.ExecutionPlan{
@@ -219,8 +239,13 @@ func TestBuildRuntimeSpecsAppliesExternalExplorationContainerBudget(t *testing.T
 		},
 	}
 	runtimeConfig := config.TaskRuntimeConfig{
-		FCUController:   config.FCUControllerConfig{ReadinessTimeoutSec: 45},
-		ExplorationGate: config.ExplorationGateConfig{Strategy: "external", ExplorationWindowSec: 26},
+		FCUController: config.FCUControllerConfig{ReadinessTimeoutSec: 45},
+		ExplorationGate: config.ExplorationGateConfig{
+			Strategy:                "external",
+			ExplorationWindowSec:    26,
+			ExternalRuntimeRoot:     gbplannerRoot,
+			ExternalRuntimeImageRef: "images.gbplanner_stack",
+		},
 		Landing: config.LandingConfig{
 			ExplorationPolicy:        helpers.PolicyReturnHomeThenLand,
 			PreLandHoldSec:           2,
@@ -236,6 +261,22 @@ func TestBuildRuntimeSpecsAppliesExternalExplorationContainerBudget(t *testing.T
 	probe := probeByName(bundle.Probes, "exploration_probe")
 	if probe == nil || probe.TimeoutSec != 295 {
 		t.Fatalf("external exploration probe spec = %#v, want container timeout 295s", probe)
+	}
+	stack := serviceByName(bundle.Services, "gbplanner_stack")
+	if stack == nil {
+		t.Fatalf("external exploration runtime is missing gbplanner_stack: %#v", bundle.Services)
+	}
+	if stack.Image != "gbplanner_stack:jazzy" || stack.ContainerName != "navlab-gbplanner-stack" {
+		t.Fatalf("gbplanner stack identity = %#v", stack)
+	}
+	if strings.Join(stack.Command, " ") != "bash /wm/gbp_stack.sh" {
+		t.Fatalf("gbplanner stack command = %#v", stack.Command)
+	}
+	for _, target := range []string{"/wm", "/gbcfg", "/adapter"} {
+		assertVolumeTarget(t, stack.Volumes, target)
+	}
+	if got := stack.Env["ROS_DOMAIN_ID"]; got != "85" {
+		t.Fatalf("gbplanner ROS_DOMAIN_ID = %q, want 85", got)
 	}
 }
 

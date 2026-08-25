@@ -30,6 +30,7 @@ DEFAULT_WORLD_FRAME_ID = "navlab_world"
 DEFAULT_WORLD_FILE = "/workspace/docker/worlds/navlab_iq_quad_figure8.sdf"
 DEFAULT_GAZEBO_TRUTH_GZ_POSE_TOPIC = "/world/navlab_iq_quad_figure8/dynamic_pose/info"
 DEFAULT_GAZEBO_TRUTH_TF_TOPIC = "/gazebo/tf"
+ROLL_PITCH_SOURCES = {"fcu", "level", "odom"}
 
 
 def _float(value: Any, default: float) -> float:
@@ -385,13 +386,21 @@ class ExternalNavSenderConfig(EndpointNodeConfig):
     quality: int = 100
     reset_counter: int = 0
     source_system: int = 191
-    use_fcu_roll_pitch: bool = True
+    roll_pitch_source: str = "fcu"
+    align_yaw_to_fcu: bool = False
+    use_fcu_yaw: bool = False
     local_position_pose_topic: str = "/navlab/fcu/local_position_pose"
     max_horizontal_speed_mps: float = 0.0
     max_yaw_rate_radps: float = 0.0
 
     @classmethod
     def from_toml(cls, data: dict[str, Any]) -> ExternalNavSenderConfig:
+        roll_pitch_source = as_str(data.get("roll_pitch_source"), "").strip().lower()
+        if not roll_pitch_source:
+            roll_pitch_source = "fcu" if as_bool(data.get("use_fcu_roll_pitch"), True) else "odom"
+        if roll_pitch_source not in ROLL_PITCH_SOURCES:
+            allowed = ", ".join(sorted(ROLL_PITCH_SOURCES))
+            raise ValueError(f"roll_pitch_source must be one of: {allowed}")
         return cls(
             autostart=as_bool(data.get("autostart"), True),
             endpoint=as_str(data.get("endpoint"), "tcp:127.0.0.1:5762"),
@@ -401,7 +410,9 @@ class ExternalNavSenderConfig(EndpointNodeConfig):
             quality=_int(data.get("quality"), 100),
             reset_counter=_int(data.get("reset_counter"), 0),
             source_system=_int(data.get("source_system"), 191),
-            use_fcu_roll_pitch=as_bool(data.get("use_fcu_roll_pitch"), True),
+            roll_pitch_source=roll_pitch_source,
+            align_yaw_to_fcu=as_bool(data.get("align_yaw_to_fcu"), False),
+            use_fcu_yaw=as_bool(data.get("use_fcu_yaw"), False),
             local_position_pose_topic=as_str(data.get("local_position_pose_topic"), "/navlab/fcu/local_position_pose"),
             max_horizontal_speed_mps=_float(data.get("max_horizontal_speed_mps"), 0.0),
             max_yaw_rate_radps=_float(data.get("max_yaw_rate_radps"), 0.0),
@@ -416,7 +427,9 @@ class ExternalNavSenderConfig(EndpointNodeConfig):
         _append_flag(argv, "--quality", self.quality)
         _append_flag(argv, "--reset-counter", self.reset_counter)
         _append_flag(argv, "--source-system", self.source_system)
-        _append_bool_flag(argv, "--use-fcu-roll-pitch", self.use_fcu_roll_pitch)
+        _append_flag(argv, "--roll-pitch-source", self.roll_pitch_source)
+        _append_boolean_optional_flag(argv, "--align-yaw-to-fcu", self.align_yaw_to_fcu)
+        _append_boolean_optional_flag(argv, "--use-fcu-yaw", self.use_fcu_yaw)
         _append_optional_flag(argv, "--local-position-pose-topic", self.local_position_pose_topic)
         _append_flag(argv, "--max-horizontal-speed-mps", self.max_horizontal_speed_mps)
         _append_flag(argv, "--max-yaw-rate-radps", self.max_yaw_rate_radps)

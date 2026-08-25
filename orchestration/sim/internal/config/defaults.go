@@ -336,6 +336,8 @@ func defaultMotionGate(cfg *MotionGateConfig) {
 
 func defaultExplorationGate(cfg *ExplorationGateConfig) {
 	cfg.Strategy = defaultString(cfg.Strategy, "frontier_lite")
+	cfg.ExternalRuntimeRoot = defaultString(cfg.ExternalRuntimeRoot, "../gbp-feat")
+	cfg.ExternalRuntimeImageRef = defaultString(cfg.ExternalRuntimeImageRef, "images.gbplanner_stack")
 	cfg.SlamOdomTopic = defaultString(cfg.SlamOdomTopic, "/slam/odom")
 	cfg.SlamStatusTopic = defaultString(cfg.SlamStatusTopic, "/navlab/slam/status")
 	cfg.ExternalNavStatusTopic = defaultString(cfg.ExternalNavStatusTopic, "/external_nav/status")

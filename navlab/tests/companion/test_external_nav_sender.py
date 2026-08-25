@@ -4,6 +4,8 @@ import math
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from navlab.common.pose import quaternion_from_yaw
 from navlab.real.companion.nodes import external_nav as external_nav_module
 from navlab.real.companion.nodes.external_nav import (
@@ -14,6 +16,7 @@ from navlab.real.companion.nodes.external_nav import (
     TimestampEpochGate,
     ros_enu_position_to_mavlink_local_frd,
     ros_enu_yaw_to_mavlink_local_frd,
+    parse_args,
 )
 
 # OPEN-2 (R003-A14): these node-level tests must not depend on pymavlink
@@ -54,8 +57,10 @@ def _roll_pitch_from_frd_quat(q: list[float]) -> tuple[float, float]:
 
 def _sender_without_ros(max_yaw_rate_radps: float = 0.0) -> MavlinkExternalNavSender:
     sender = MavlinkExternalNavSender.__new__(MavlinkExternalNavSender)
+    sender._roll_pitch_source = "fcu"
     sender._use_fcu_roll_pitch = True
     sender._align_yaw_to_fcu = True
+    sender._use_fcu_yaw = False
     sender._fcu_roll_rad = 0.0
     sender._fcu_pitch_rad = 0.0
     sender._fcu_yaw_rad = -0.5
@@ -90,6 +95,41 @@ def test_odometry_quaternion_can_send_raw_slam_yaw_without_alignment() -> None:
     assert sender._yaw_alignment_offset_rad is None
     assert math.isclose(_yaw_from_ros_quat_enu(_pose_with_yaw(0.1).orientation), 0.1, abs_tol=1e-6)
     assert math.isclose(ros_enu_yaw_to_mavlink_local_frd(0.1), (math.pi * 0.5) - 0.1, abs_tol=1e-6)
+
+
+def test_odometry_quaternion_can_follow_fcu_yaw_for_position_control() -> None:
+    sender = _sender_without_ros()
+    sender._use_fcu_yaw = True
+    sender._fcu_yaw_rad = -0.5
+
+    q = sender._odometry_quaternion(_pose_with_yaw(1.2))
+
+    assert math.isclose(_yaw_from_frd_quat(q), -0.5, abs_tol=1e-6)
+    assert sender._yaw_alignment_offset_rad is None
+
+
+def test_runtime_can_preserve_physical_initial_heading_from_slam_yaw() -> None:
+    args = parse_args(["--roll-pitch-source", "fcu", "--no-align-yaw-to-fcu", "--no-use-fcu-yaw"])
+
+    assert args.roll_pitch_source == "fcu"
+    assert args.use_fcu_roll_pitch is True
+    assert args.align_yaw_to_fcu is False
+    assert args.use_fcu_yaw is False
+
+
+def test_level_roll_pitch_uses_raw_slam_yaw_without_fcu_attitude() -> None:
+    sender = _sender_without_ros()
+    sender._roll_pitch_source = "level"
+    sender._use_fcu_roll_pitch = False
+    sender._align_yaw_to_fcu = False
+    sender._last_fcu_attitude_monotonic = 0.0
+
+    q = sender._odometry_quaternion(_pose_with_yaw(0.1), now_monotonic=10.0)
+    roll, pitch = _roll_pitch_from_frd_quat(q)
+
+    assert math.isclose(roll, 0.0, abs_tol=1e-6)
+    assert math.isclose(pitch, 0.0, abs_tol=1e-6)
+    assert math.isclose(_yaw_from_frd_quat(q), (math.pi * 0.5) - 0.1, abs_tol=1e-6)
 
 
 def test_ros_enu_position_maps_to_mavlink_local_frd_axes() -> None:
@@ -235,7 +275,9 @@ def _odom_with(stamp_sec: int, stamp_nsec: int, x: float = 0.0) -> object:
 
 def _sender_for_send_tick() -> MavlinkExternalNavSender:
     sender = _sender_without_ros()
+    sender._roll_pitch_source = "odom"
     sender._use_fcu_roll_pitch = False
+    sender._align_yaw_to_fcu = False
     sender._connection = _RecordingConnection()
     sender._last_odom = None
     sender._last_heartbeat_monotonic = time.monotonic()
@@ -320,6 +362,7 @@ def test_send_tick_drops_old_packets_and_recovers_after_confirmed_reset() -> Non
     tick(1, 100_000_000)
     assert len(sender._connection.mav.odometry_calls) == 4
     assert sender._clock_reset_count == 1
+    assert sender._reset_counter == 1
     assert sender._last_limited_odom_x is not None  # limiter re-primed post-reset
 
     # New epoch flows normally afterwards.
@@ -340,7 +383,7 @@ def test_send_tick_zero_stamp_stream_counts_and_recovers() -> None:
     assert len(sender._connection.mav.odometry_calls) == 1
 
 
-def test_odometry_quaternion_does_not_feed_fcu_roll_pitch_back_to_external_nav() -> None:
+def test_odometry_quaternion_preserves_fcu_roll_pitch_for_external_nav() -> None:
     sender = _sender_without_ros()
     sender._fcu_roll_rad = 0.4
     sender._fcu_pitch_rad = -0.3
@@ -348,9 +391,40 @@ def test_odometry_quaternion_does_not_feed_fcu_roll_pitch_back_to_external_nav()
     q = sender._odometry_quaternion(_pose_with_yaw(0.1))
     roll, pitch = _roll_pitch_from_frd_quat(q)
 
-    assert math.isclose(roll, 0.0, abs_tol=1e-6)
-    assert math.isclose(pitch, 0.0, abs_tol=1e-6)
+    assert math.isclose(roll, 0.4, abs_tol=1e-6)
+    assert math.isclose(pitch, -0.3, abs_tol=1e-6)
     assert math.isclose(_yaw_from_frd_quat(q), -0.5, abs_tol=1e-6)
+
+
+def test_fcu_roll_pitch_source_rejects_stale_attitude_instead_of_falling_back() -> None:
+    sender = _sender_without_ros()
+    sender._last_fcu_attitude_monotonic = 1.0
+
+    with pytest.raises(RuntimeError, match="fresh FCU ATTITUDE"):
+        sender._odometry_quaternion(_pose_with_yaw(0.1), now_monotonic=3.0)
+
+
+def test_fcu_and_level_modes_only_change_roll_pitch_quaternion_fields() -> None:
+    odom = _odom_with(5, 0, x=0.2)
+    calls = []
+    for source in ("fcu", "level"):
+        sender = _sender_for_send_tick()
+        sender._roll_pitch_source = source
+        sender._use_fcu_roll_pitch = source == "fcu"
+        sender._align_yaw_to_fcu = False
+        sender._fcu_roll_rad = 0.2
+        sender._fcu_pitch_rad = -0.1
+        sender._last_fcu_attitude_monotonic = time.monotonic()
+        sender._last_odom = odom
+        sender._send_tick()
+        calls.append(sender._connection.mav.odometry_calls[0])
+
+    fcu_call, level_call = calls
+    assert fcu_call[1:3] == (20, 12)
+    assert level_call[1:3] == (20, 12)
+    assert fcu_call[:6] == level_call[:6]
+    assert fcu_call[7:] == level_call[7:]
+    assert fcu_call[6] != level_call[6]
 
 
 def test_rate_limit_xy_keeps_slam_horizontal_spikes_from_reaching_fcu() -> None:
@@ -410,12 +484,24 @@ def test_roll_pitch_speeds_are_zero_when_fcu_roll_pitch_is_used() -> None:
     assert math.isclose(pitchspeed, 0.0)
 
 
-def test_roll_pitch_speeds_fall_back_to_odom_when_fcu_attitude_is_stale() -> None:
+def test_roll_pitch_speeds_do_not_change_source_when_fcu_attitude_is_stale() -> None:
     sender = _sender_without_ros()
     sender._last_fcu_attitude_monotonic = 1.0
     twist = SimpleNamespace(angular=SimpleNamespace(x=9.5, y=6.1))
 
     rollspeed, pitchspeed = sender._roll_pitch_speeds(twist, now_monotonic=3.0)
 
-    assert math.isclose(rollspeed, 9.5)
-    assert math.isclose(pitchspeed, -6.1)
+    assert math.isclose(rollspeed, 0.0)
+    assert math.isclose(pitchspeed, 0.0)
+
+
+def test_send_tick_fails_closed_when_fcu_attitude_is_stale() -> None:
+    sender = _sender_for_send_tick()
+    sender._roll_pitch_source = "fcu"
+    sender._use_fcu_roll_pitch = True
+    sender._last_fcu_attitude_monotonic = 1.0
+    sender._last_odom = _odom_with(5, 0)
+
+    sender._send_tick()
+
+    assert sender._connection.mav.odometry_calls == []

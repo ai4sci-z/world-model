@@ -35,6 +35,7 @@ MAVLINK_POSITION_FRAME = "MAV_FRAME_LOCAL_FRD"
 MAVLINK_VELOCITY_FRAME = "MAV_FRAME_BODY_FRD"
 MAVLINK_ESTIMATOR_TYPE = "MAV_ESTIMATOR_TYPE_VIO"
 ROS_ODOM_SEMANTICS = "ROS ENU position with FLU body twist"
+ROLL_PITCH_SOURCES = ("fcu", "level", "odom")
 # OPEN-1 流请求风暴门控:两流均新鲜(墙钟)则不重发 SET_MESSAGE_INTERVAL;超此阈值视为陈旧可重发
 STREAM_REREQUEST_STALE_SEC = 5.0
 
@@ -242,8 +243,9 @@ def _odometry_mapping_status(
     reset_counter: int,
     rate_hz: float,
     source_system: int,
-    use_fcu_roll_pitch: bool,
+    roll_pitch_source: str,
     align_yaw_to_fcu: bool,
+    use_fcu_yaw: bool,
 ) -> dict[str, object]:
     return {
         "input": {
@@ -262,8 +264,12 @@ def _odometry_mapping_status(
             "quality": quality,
             "reset_counter": reset_counter,
             "time_usec_source": MAVLINK_TIME_SOURCE,
-            "roll_pitch_source": "level roll/pitch" if use_fcu_roll_pitch else "ROS odom quaternion",
-            "yaw_source": "SLAM odom yaw, initial-aligned to FCU ATTITUDE" if align_yaw_to_fcu else "SLAM odom yaw",
+            "roll_pitch_source": roll_pitch_source,
+            "yaw_source": (
+                "FCU ATTITUDE yaw"
+                if use_fcu_yaw
+                else ("SLAM odom yaw, initial-aligned to FCU ATTITUDE" if align_yaw_to_fcu else "SLAM odom yaw")
+            ),
         },
         "field_map": {
             "time_usec": MAVLINK_TIME_SOURCE,
@@ -271,15 +277,19 @@ def _odometry_mapping_status(
             "y": "odom.pose.pose.position.x",
             "z": "-odom.pose.pose.position.z",
             "q": (
-                "level roll/pitch + converted odom yaw"
-                if use_fcu_roll_pitch
-                else "[w, x, -y, -z] from odom.pose.pose.orientation"
+                "FCU ATTITUDE roll/pitch + selected yaw"
+                if roll_pitch_source == "fcu"
+                else (
+                    "level roll/pitch + selected yaw"
+                    if roll_pitch_source == "level"
+                    else "[w, x, -y, -z] from odom.pose.pose.orientation"
+                )
             ),
             "vx": "odom.twist.twist.linear.x",
             "vy": "-odom.twist.twist.linear.y",
             "vz": "-odom.twist.twist.linear.z",
-            "rollspeed": "0.0 (roll source is FCU ATTITUDE)" if use_fcu_roll_pitch else "odom.twist.twist.angular.x",
-            "pitchspeed": "0.0 (pitch source is FCU ATTITUDE)" if use_fcu_roll_pitch else "-odom.twist.twist.angular.y",
+            "rollspeed": "0.0" if roll_pitch_source != "odom" else "odom.twist.twist.angular.x",
+            "pitchspeed": "0.0" if roll_pitch_source != "odom" else "-odom.twist.twist.angular.y",
             "yawspeed": "-odom.twist.twist.angular.z",
             "pose_covariance": "upper triangular odom.pose.covariance",
             "velocity_covariance": "upper triangular odom.twist.covariance",
@@ -295,8 +305,12 @@ class MavlinkExternalNavSender(Node):
         self._quality = args.quality
         self._reset_counter = args.reset_counter
         self._source_system = args.source_system
-        self._use_fcu_roll_pitch = args.use_fcu_roll_pitch
+        self._roll_pitch_source = getattr(args, "roll_pitch_source", None) or (
+            "fcu" if getattr(args, "use_fcu_roll_pitch", False) else "odom"
+        )
+        self._use_fcu_roll_pitch = self._roll_pitch_source == "fcu"
         self._align_yaw_to_fcu = args.align_yaw_to_fcu
+        self._use_fcu_yaw = args.use_fcu_yaw
         self._odom_topic = args.odom_topic
         self._max_odom_age_ms = args.max_odom_age_ms
         self._max_local_position_age_ms = args.max_local_position_age_ms
@@ -360,8 +374,9 @@ class MavlinkExternalNavSender(Node):
             "mavlink_external_nav_sender started "
             f"endpoint={self._endpoint} odom_topic={args.odom_topic} rate={self._rate_hz:.3f}Hz "
             f"quality={self._quality} reset_counter={self._reset_counter} "
-            f"use_fcu_roll_pitch={self._use_fcu_roll_pitch} "
+            f"roll_pitch_source={self._roll_pitch_source} "
             f"align_yaw_to_fcu={self._align_yaw_to_fcu} "
+            f"use_fcu_yaw={self._use_fcu_yaw} "
             f"local_position_pose_topic={args.local_position_pose_topic or '<disabled>'}"
         )
 
@@ -384,6 +399,11 @@ class MavlinkExternalNavSender(Node):
             self._last_heartbeat_monotonic = now_monotonic
 
         if self._last_odom is None:
+            return
+
+        if self._requires_fcu_attitude() and not self._fcu_attitude_fresh(now_monotonic):
+            # The selected attitude contract is part of this measurement. Do
+            # not silently switch to a different quaternion source in flight.
             return
 
         odom = self._last_odom
@@ -417,6 +437,7 @@ class MavlinkExternalNavSender(Node):
             # and start a fresh epoch, otherwise the feed starves until sim
             # time outruns the pre-reset stamp.
             self._clock_reset_count += 1
+            self._reset_counter = (self._reset_counter + 1) % 256
             self._last_sent_time_usec = None
             self._last_limited_odom_x = None
             self._last_limited_odom_y = None
@@ -501,7 +522,7 @@ class MavlinkExternalNavSender(Node):
                 self._publish_local_position_pose(msg)
 
     def _request_fcu_attitude_if_needed(self, now_monotonic: float) -> None:
-        if not self._use_fcu_roll_pitch and not self._local_position_pose_pub:
+        if not self._requires_fcu_attitude() and not self._local_position_pose_pub:
             return
         if self._target_system is None or self._target_component is None:
             return
@@ -561,31 +582,42 @@ class MavlinkExternalNavSender(Node):
     ) -> list[float]:
         if now_monotonic is None:
             now_monotonic = time.monotonic()
-        if self._use_fcu_roll_pitch and self._fcu_roll_rad is not None and self._fcu_pitch_rad is not None:
-            if self._fcu_attitude_fresh(now_monotonic):
-                yaw_ned_rad = ros_enu_yaw_to_mavlink_local_frd(_yaw_from_ros_quat_enu(pose.orientation))
-                if self._align_yaw_to_fcu:
-                    if self._yaw_alignment_offset_rad is None:
-                        self._yaw_alignment_offset_rad = self._fcu_yaw_rad - yaw_ned_rad
-                    yaw_ned_rad += self._yaw_alignment_offset_rad
-                yaw_ned_rad = self._limit_yaw(yaw_ned_rad, now_monotonic=now_monotonic, meas_dt_sec=meas_dt_sec)
-                return _quat_from_roll_pitch_yaw_frd(
-                    roll_rad=0.0,
-                    pitch_rad=0.0,
-                    yaw_rad=yaw_ned_rad,
-                )
-        return _ros_quat_to_frd(pose.orientation)
+        if self._roll_pitch_source == "odom":
+            return _ros_quat_to_frd(pose.orientation)
+        if self._requires_fcu_attitude() and not self._fcu_attitude_fresh(now_monotonic):
+            raise RuntimeError("fresh FCU ATTITUDE is required by the selected odometry attitude contract")
+
+        if self._use_fcu_yaw:
+            yaw_ned_rad = self._fcu_yaw_rad
+        else:
+            yaw_ned_rad = ros_enu_yaw_to_mavlink_local_frd(_yaw_from_ros_quat_enu(pose.orientation))
+        if self._align_yaw_to_fcu and not self._use_fcu_yaw:
+            if self._yaw_alignment_offset_rad is None:
+                self._yaw_alignment_offset_rad = self._fcu_yaw_rad - yaw_ned_rad
+            yaw_ned_rad += self._yaw_alignment_offset_rad
+        yaw_ned_rad = self._limit_yaw(yaw_ned_rad, now_monotonic=now_monotonic, meas_dt_sec=meas_dt_sec)
+
+        roll_rad = self._fcu_roll_rad if self._roll_pitch_source == "fcu" else 0.0
+        pitch_rad = self._fcu_pitch_rad if self._roll_pitch_source == "fcu" else 0.0
+        return _quat_from_roll_pitch_yaw_frd(
+            roll_rad=float(roll_rad),
+            pitch_rad=float(pitch_rad),
+            yaw_rad=yaw_ned_rad,
+        )
+
+    def _requires_fcu_attitude(self) -> bool:
+        return self._roll_pitch_source == "fcu" or self._use_fcu_yaw or self._align_yaw_to_fcu
 
     def _fcu_attitude_fresh(self, now_monotonic: float) -> bool:
-        return now_monotonic - self._last_fcu_attitude_monotonic <= 1.0
+        return (
+            self._last_fcu_attitude_monotonic > 0.0
+            and self._fcu_roll_rad is not None
+            and self._fcu_pitch_rad is not None
+            and now_monotonic - self._last_fcu_attitude_monotonic <= 1.0
+        )
 
     def _roll_pitch_speeds(self, twist: object, *, now_monotonic: float) -> tuple[float, float]:
-        if (
-            self._use_fcu_roll_pitch
-            and self._fcu_rollspeed_radps is not None
-            and self._fcu_pitchspeed_radps is not None
-            and self._fcu_attitude_fresh(now_monotonic)
-        ):
+        if self._roll_pitch_source != "odom":
             return 0.0, 0.0
         return float(twist.angular.x), -float(twist.angular.y)
 
@@ -632,8 +664,21 @@ class MavlinkExternalNavSender(Node):
         local_position_fresh = (
             self._local_position_count > 0 and 0.0 <= local_position_age_ms <= self._max_local_position_age_ms
         )
-        state = "sending" if self._last_odom is not None else "waiting_for_external_nav_odom"
-        ready = state == "sending" and self._sent_count > 0 and odom_fresh and local_position_fresh
+        attitude_required = self._requires_fcu_attitude()
+        attitude_fresh = self._fcu_attitude_fresh(time.monotonic())
+        if self._last_odom is None:
+            state = "waiting_for_external_nav_odom"
+        elif attitude_required and not attitude_fresh:
+            state = "waiting_for_fcu_attitude"
+        else:
+            state = "sending"
+        ready = (
+            state == "sending"
+            and self._sent_count > 0
+            and odom_fresh
+            and local_position_fresh
+            and (not attitude_required or attitude_fresh)
+        )
 
         status = {
             "state": state,
@@ -662,9 +707,13 @@ class MavlinkExternalNavSender(Node):
             "invalid_stamp_count": self._invalid_stamp_count,
             "stale_stamp_count": self._stale_stamp_count,
             "use_fcu_roll_pitch": self._use_fcu_roll_pitch,
+            "roll_pitch_source": self._roll_pitch_source,
             "align_yaw_to_fcu": self._align_yaw_to_fcu,
+            "use_fcu_yaw": self._use_fcu_yaw,
             "yaw_alignment_offset_rad": self._yaw_alignment_offset_rad,
             "fcu_attitude_age_ms": round(attitude_age_ms, 3),
+            "fcu_attitude_required": attitude_required,
+            "fcu_attitude_ready": attitude_fresh,
             "local_position_pose_topic": self._local_position_pose_topic,
             "local_position_count": self._local_position_count,
             "local_position_age_ms": round(local_position_age_ms, 3),
@@ -676,8 +725,9 @@ class MavlinkExternalNavSender(Node):
                 reset_counter=self._reset_counter,
                 rate_hz=self._rate_hz,
                 source_system=self._source_system,
-                use_fcu_roll_pitch=self._use_fcu_roll_pitch,
+                roll_pitch_source=self._roll_pitch_source,
                 align_yaw_to_fcu=self._align_yaw_to_fcu,
+                use_fcu_yaw=self._use_fcu_yaw,
             ),
         }
         msg = String()
@@ -694,14 +744,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--quality", type=int, default=100)
     parser.add_argument("--reset-counter", type=int, default=0)
     parser.add_argument("--source-system", type=int, default=191)
-    parser.add_argument("--use-fcu-roll-pitch", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--roll-pitch-source", choices=ROLL_PITCH_SOURCES, default=None)
+    parser.add_argument("--use-fcu-roll-pitch", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--align-yaw-to-fcu", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use-fcu-yaw", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--local-position-pose-topic", default="")
     parser.add_argument("--max-odom-age-ms", type=float, default=1000.0)
     parser.add_argument("--max-local-position-age-ms", type=float, default=1000.0)
     parser.add_argument("--max-horizontal-speed-mps", type=float, default=0.0)
     parser.add_argument("--max-yaw-rate-radps", type=float, default=0.0)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.roll_pitch_source is None:
+        args.roll_pitch_source = "fcu" if args.use_fcu_roll_pitch else "odom"
+    elif args.use_fcu_roll_pitch is not None and args.use_fcu_roll_pitch != (args.roll_pitch_source == "fcu"):
+        parser.error("--use-fcu-roll-pitch conflicts with --roll-pitch-source")
+    args.use_fcu_roll_pitch = args.roll_pitch_source == "fcu"
+    if args.reset_counter < 0 or args.reset_counter > 255:
+        parser.error("--reset-counter must be in [0, 255]")
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:

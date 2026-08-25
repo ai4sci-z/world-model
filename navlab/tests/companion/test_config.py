@@ -20,6 +20,7 @@ def test_runtime_config_world_markers_follow_navlab_quad_root() -> None:
     scan_argv = config.scan_features.argv()
     odom_argv = config.gazebo_truth_odom.argv()
     mission_argv = config.mission.argv()
+    external_nav_argv = config.external_nav_sender.argv()
 
     assert config.world_markers.root_model_name == "navlab_iq_quad"
     assert config.world_markers.frame_id == "navlab_world"
@@ -62,6 +63,12 @@ def test_runtime_config_world_markers_follow_navlab_quad_root() -> None:
     assert config.gazebo_truth_odom.odom_topic == "/gazebo/truth/odom"
     index_flag = odom_argv.index("--transform-index")
     assert odom_argv[index_flag + 1] == "0"
+    assert config.external_nav_sender.roll_pitch_source == "fcu"
+    assert config.external_nav_sender.max_horizontal_speed_mps == 0.0
+    assert "--roll-pitch-source" in external_nav_argv
+    assert external_nav_argv[external_nav_argv.index("--roll-pitch-source") + 1] == "fcu"
+    assert "--no-align-yaw-to-fcu" in external_nav_argv
+    assert "--no-use-fcu-yaw" in external_nav_argv
     assert "--require-external-nav" in mission_argv
     assert "--require-imu-status" in mission_argv
     assert "--require-disarm" in mission_argv

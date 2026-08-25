@@ -7,6 +7,45 @@ import time
 
 SPEC = json.loads({{ printf "%q" .SpecJSON }})
 
+def handle_mavlink_statustext(state: dict, *, severity: int, text: str, fail_landing, indicates_crash) -> bool:
+    normalized_text = str(text).rstrip("\x00")
+    if not indicates_crash(normalized_text):
+        return False
+    state["crash_detected"] = True
+    crash_statustext = state.setdefault("mavlink_crash_statustext", [])
+    crash_statustext.append({"severity": int(severity), "text": normalized_text})
+    del crash_statustext[:-20]
+    fail_landing("crash_detected")
+    return True
+
+def landing_physical_health(state: dict) -> dict:
+    roll = state.get("mavlink_roll_rad")
+    pitch = state.get("mavlink_pitch_rad")
+    tilt_deg = None
+    if roll is not None and pitch is not None:
+        cos_tilt = math.cos(float(roll)) * math.cos(float(pitch))
+        tilt_deg = math.degrees(math.acos(max(-1.0, min(1.0, cos_tilt))))
+        state["max_landing_tilt_deg"] = max(float(state.get("max_landing_tilt_deg", 0.0) or 0.0), tilt_deg)
+    vx = state.get("mavlink_local_vx_mps")
+    vy = state.get("mavlink_local_vy_mps")
+    xy_speed_mps = None if vx is None or vy is None else math.hypot(float(vx), float(vy))
+    if xy_speed_mps is not None:
+        state["max_landing_xy_speed_mps"] = max(float(state.get("max_landing_xy_speed_mps", 0.0) or 0.0), xy_speed_mps)
+    z_ned = state.get("mavlink_local_z_m")
+    range_m = state.get("current_range_m")
+    altitude_disagreement_m = None
+    if z_ned is not None and range_m is not None:
+        altitude_disagreement_m = abs(max(0.0, -float(z_ned)) - float(range_m))
+        state["max_landing_altitude_disagreement_m"] = max(
+            float(state.get("max_landing_altitude_disagreement_m", 0.0) or 0.0),
+            altitude_disagreement_m,
+        )
+    return {
+        "tilt_deg": tilt_deg,
+        "xy_speed_mps": xy_speed_mps,
+        "altitude_disagreement_m": altitude_disagreement_m,
+    }
+
 def main() -> int:
     import rclpy
     from rclpy.parameter import Parameter
@@ -21,6 +60,7 @@ def main() -> int:
         LandingEvidenceRecorder,
         landing_touchdown_candidate,
     )
+    from navlab.common.companion.mission.runtime_state import statustext_indicates_crash
 
     rclpy.init()
     node = rclpy.create_node("navlab_fcu_controller")
@@ -47,23 +87,31 @@ def main() -> int:
         "setpoint_intent": {},
         "setpoint_intent_count": 0,
         "last_setpoint_intent_ms": 0,
+        "last_setpoint_intent_monotonic": 0.0,
         "cmd_vel_publish_count": 0,
         "mavlink_master": None,
         "mavlink_target_system": 0,
         "mavlink_target_component": 0,
         "mavlink_setpoint_count": 0,
+        "mavlink_setpoint_source_counts": {},
         "mavlink_setpoint_error": "",
         "mavlink_local_position_count": 0,
         "mavlink_local_x_m": None,
         "mavlink_local_y_m": None,
         "mavlink_local_z_m": None,
         "mavlink_local_vz_mps": None,
+        "mavlink_local_vx_mps": None,
+        "mavlink_local_vy_mps": None,
         "mavlink_yaw_rad": None,
+        "mavlink_roll_rad": None,
+        "mavlink_pitch_rad": None,
         "mavlink_armed": None,
         "mavlink_custom_mode": None,
         "mavlink_land_mode": None,
         "mavlink_landed_state": None,
         "mavlink_command_acks": {},
+        "mavlink_crash_statustext": [],
+        "crash_detected": False,
         "current_range_m": None,
         "ground_range_m": None,
         "rangefinder_sample_count": 0,
@@ -82,6 +130,7 @@ def main() -> int:
         "task_completion_status": {},
         "home_pose_ned": None,
         "landing_anchor_ned": None,
+        "landing_hold_ned": None,
         "landing_phase": "idle",
         "landing_started_monotonic": None,
         "landing_phase_started_monotonic": None,
@@ -98,6 +147,10 @@ def main() -> int:
         "disarm_command_last_sent_monotonic": 0.0,
         "touchdown_confirmed": False,
         "landing_failure_blockers": [],
+        "pre_land_stable_since_monotonic": None,
+        "max_landing_tilt_deg": 0.0,
+        "max_landing_xy_speed_mps": 0.0,
+        "max_landing_altitude_disagreement_m": 0.0,
         "landing_evidence": LandingEvidenceRecorder(),
         "ready_since_monotonic": None,
         "ready_elapsed_sec": 0.0,
@@ -493,6 +546,7 @@ def main() -> int:
                 "x": float(current_x), "y": float(current_y),
                 "z": float(current_z), "yaw": float(current_yaw),
             }
+            state["landing_hold_ned"] = dict(state["landing_anchor_ned"])
         if SPEC.get("landing_policy") == "return_home_then_land":
             state["landing_phase"] = "returning_home"
             state["return_home_started_monotonic"] = now
@@ -558,6 +612,7 @@ def main() -> int:
         state["setpoint_intent"] = payload
         state["setpoint_intent_count"] += 1
         state["last_setpoint_intent_ms"] = int(time.time() * 1000)
+        state["last_setpoint_intent_monotonic"] = time.monotonic()
         if state.get("landing_phase") != "idle":
             return
         # Do not forward exploration intent to the FCU until takeoff has
@@ -576,7 +631,7 @@ def main() -> int:
             # 计数 cmd_vel 1050 / setpoint 1046 = 双通道同时打架)。
             # 对照:hover_mission 路径 10/10 稳定,它只发位置目标、从不发 cmd_vel。
             # 修:统一走位置目标单一通道(位置控制也是 GBPlanner 航点跟踪所需)。
-            send_mavlink_local_position_setpoint(payload)
+            send_mavlink_local_position_setpoint(payload, source="exploration_intent")
 
     def publish_cmd_vel_from_intent(payload: dict) -> None:
         cmd = TwistStamped()
@@ -586,10 +641,8 @@ def main() -> int:
         cmd.twist.linear.y = float(payload.get("linear_y_mps", 0.0) or 0.0)
         cmd.twist.linear.z = 0.0
         cmd.twist.angular.z = float(payload.get("yaw_rate_radps", 0.0) or 0.0)
-        # 双重控制修复(2026-07-29):停发 DDS 速度指令,统一走 MAVLink 位置目标单通道
-        # cmd_vel_pub.publish(cmd)
-        state["cmd_vel_publish_count"] = int(state.get("cmd_vel_publish_count", 0) or 0)  # 保留计数字段(应恒为0)
-        state["cmd_vel_publish_count"] += 1
+        # DDS output is intentionally disabled: the FCU has one active control
+        # route, MAVLink LOCAL_NED setpoints. Keep the counter truthful.
 
     def refresh_mavlink_state(master) -> None:
         from pymavlink import mavutil
@@ -606,6 +659,8 @@ def main() -> int:
             if msg_type == "ATTITUDE":
                 # M5 帧闭环:采 FCU 自身 NED yaw,用于机体系 intent → LOCAL_NED 旋转
                 state["mavlink_yaw_rad"] = float(msg.yaw)
+                state["mavlink_roll_rad"] = float(msg.roll)
+                state["mavlink_pitch_rad"] = float(msg.pitch)
                 continue
             if msg_type == "HEARTBEAT":
                 if int(getattr(msg, "autopilot", mavutil.mavlink.MAV_AUTOPILOT_INVALID)) == int(mavutil.mavlink.MAV_AUTOPILOT_INVALID):
@@ -633,12 +688,23 @@ def main() -> int:
                 if command == int(mavutil.mavlink.MAV_CMD_NAV_LAND) and result == int(mavutil.mavlink.MAV_RESULT_ACCEPTED):
                     state["land_command_accepted"] = True
                 continue
+            if msg_type == "STATUSTEXT":
+                handle_mavlink_statustext(
+                    state,
+                    severity=int(msg.severity),
+                    text=msg.text,
+                    fail_landing=fail_landing,
+                    indicates_crash=statustext_indicates_crash,
+                )
+                continue
             if msg_type != "LOCAL_POSITION_NED":
                 continue
             data = msg.to_dict()
             state["mavlink_local_x_m"] = float(data.get("x", 0.0) or 0.0)
             state["mavlink_local_y_m"] = float(data.get("y", 0.0) or 0.0)
             state["mavlink_local_z_m"] = float(data.get("z", 0.0) or 0.0)
+            state["mavlink_local_vx_mps"] = float(data.get("vx", 0.0) or 0.0)
+            state["mavlink_local_vy_mps"] = float(data.get("vy", 0.0) or 0.0)
             state["mavlink_local_vz_mps"] = float(data.get("vz", 0.0) or 0.0)
             state["mavlink_local_position_count"] = int(state.get("mavlink_local_position_count", 0) or 0) + 1
         if (
@@ -662,7 +728,12 @@ def main() -> int:
                 "yaw": float(state["mavlink_yaw_rad"]),
             }
 
-    def send_mavlink_local_position_setpoint(payload: dict) -> None:
+    def count_mavlink_setpoint(source: str) -> None:
+        state["mavlink_setpoint_count"] = int(state.get("mavlink_setpoint_count", 0) or 0) + 1
+        source_counts = state["mavlink_setpoint_source_counts"]
+        source_counts[source] = int(source_counts.get(source, 0) or 0) + 1
+
+    def send_mavlink_local_position_setpoint(payload: dict, *, source: str) -> None:
         from pymavlink import mavutil
 
         if not bootstrap_ready(state):
@@ -802,7 +873,7 @@ def main() -> int:
                     float(state.get("local_setpoint_yaw_rad", 0.0) or 0.0),
                     0.0,
                 )
-            state["mavlink_setpoint_count"] = int(state.get("mavlink_setpoint_count", 0) or 0) + 1
+            count_mavlink_setpoint(source)
             state["mavlink_setpoint_error"] = ""
         except Exception as exc:
             state["mavlink_setpoint_error"] = f"{type(exc).__name__}: {exc}"
@@ -813,11 +884,30 @@ def main() -> int:
         cmd.header.frame_id = SPEC.get("base_frame_id", "base_link")
         # 双重控制修复(2026-07-29):停发 DDS 速度指令,统一走 MAVLink 位置目标单通道
         # cmd_vel_pub.publish(cmd)
-        state["cmd_vel_publish_count"] = int(state.get("cmd_vel_publish_count", 0) or 0)  # 保留计数字段(应恒为0)
-        state["cmd_vel_publish_count"] += 1
-        send_mavlink_local_position_setpoint({"linear_x_mps": 0.0, "linear_y_mps": 0.0, "yaw_rate_radps": 0.0})
+        send_mavlink_local_position_setpoint(
+            {"linear_x_mps": 0.0, "linear_y_mps": 0.0, "yaw_rate_radps": 0.0},
+            source="hover_hold",
+        )
 
-    def send_mavlink_position_target(target: dict) -> None:
+    def exploration_intent_is_fresh(now: float) -> bool:
+        """Return whether the adapter currently owns the position setpoint.
+
+        The controller publishes a hold only when no fresh, successful intent
+        is present.  Previously the 20 Hz hover tick always sent a hold and
+        re-anchored the cumulative LOCAL_NED target after every adapter
+        command, preventing any sustained GBPlanner motion.
+        """
+        if state.get("landing_phase", "idle") != "idle":
+            return False
+        payload = state.get("setpoint_intent")
+        if not isinstance(payload, dict) or payload.get("ok") is not True:
+            return False
+        last = float(state.get("last_setpoint_intent_monotonic", 0.0) or 0.0)
+        if last <= 0.0 or now - last > 1.0:
+            return False
+        return True
+
+    def send_mavlink_position_target(target: dict, *, source: str) -> None:
         from pymavlink import mavutil
 
         master = state.get("mavlink_master")
@@ -837,12 +927,23 @@ def main() -> int:
                 0.0, 0.0, 0.0,
                 float(target["yaw"]), 0.0,
             )
-        state["mavlink_setpoint_count"] = int(state.get("mavlink_setpoint_count", 0) or 0) + 1
+        count_mavlink_setpoint(source)
 
     def fail_landing(blocker: str) -> None:
         if blocker not in state["landing_failure_blockers"]:
             state["landing_failure_blockers"].append(blocker)
         state["landing_phase"] = "failed"
+
+    def enforce_landing_physical_health(health: dict) -> bool:
+        tilt_deg = health.get("tilt_deg")
+        if tilt_deg is not None and tilt_deg > float(SPEC.get("max_landing_tilt_deg", 35.0) or 35.0):
+            fail_landing("landing_tilt_limit_exceeded")
+            return False
+        disagreement = health.get("altitude_disagreement_m")
+        if disagreement is not None and disagreement > float(SPEC.get("max_landing_altitude_disagreement_m", 1.0) or 1.0):
+            fail_landing("landing_altitude_sources_disagree")
+            return False
+        return True
 
     def send_land_command(now: float) -> None:
         from pymavlink import mavutil
@@ -895,6 +996,9 @@ def main() -> int:
         current_x = state.get("mavlink_local_x_m")
         current_y = state.get("mavlink_local_y_m")
         current_z = state.get("mavlink_local_z_m")
+        health = landing_physical_health(state)
+        if not enforce_landing_physical_health(health):
+            return
         if phase == "returning_home":
             home = state.get("home_pose_ned")
             if home is None:
@@ -909,8 +1013,14 @@ def main() -> int:
                 state["return_home_distance_m"] = distance
                 if distance < float(SPEC.get("home_radius_m", 0.35) or 0.35):
                     state["return_home_completed_monotonic"] = now
+                    if None not in (current_x, current_y, current_z, state.get("mavlink_yaw_rad")):
+                        state["landing_hold_ned"] = {
+                            "x": float(current_x), "y": float(current_y),
+                            "z": float(current_z), "yaw": float(state["mavlink_yaw_rad"]),
+                        }
                     state["landing_phase"] = "pre_land_hold"
                     state["landing_phase_started_monotonic"] = now
+                    state["pre_land_stable_since_monotonic"] = None
                     return
             target = state.get("return_setpoint_ned")
             if target is None:
@@ -933,27 +1043,39 @@ def main() -> int:
                 target["y"] = float(target["y"]) + to_home_y * step / target_distance
             target["z"] = float(home["z"])
             target["yaw"] = float(home["yaw"])
-            if current_x is not None and current_y is not None:
-                lead_x = float(target["x"]) - float(current_x)
-                lead_y = float(target["y"]) - float(current_y)
-                lead = math.hypot(lead_x, lead_y)
-                max_lead_m = max(0.20, float(SPEC.get("home_radius_m", 0.35) or 0.35))
-                if lead > max_lead_m:
-                    scale = max_lead_m / lead
-                    target["x"] = float(current_x) + lead_x * scale
-                    target["y"] = float(current_y) + lead_y * scale
+            # Return-home is an absolute LOCAL_NED correction.  Re-clamping
+            # this target around the moving FCU position creates positive
+            # feedback: when the vehicle is already drifting, the clamp moves
+            # the home target with it and the aircraft never gets a restoring
+            # command.  The target above is already slew-limited from the
+            # captured anchor toward home, so keep it monotonic and absolute.
             state["return_setpoint_ned"] = target
             state["return_setpoint_last_monotonic"] = now
-            send_mavlink_position_target(target)
+            send_mavlink_position_target(target, source="return_home")
             return
         if phase == "pre_land_hold":
-            target = state.get("home_pose_ned") if SPEC.get("landing_policy") == "return_home_then_land" else state.get("landing_anchor_ned")
+            target = state.get("landing_hold_ned")
             if target is None:
                 fail_landing("landing_hold_anchor_missing")
                 return
-            send_mavlink_position_target(target)
+            send_mavlink_position_target(target, source="pre_land_hold")
             phase_started = float(state.get("landing_phase_started_monotonic") or now)
-            if now - phase_started >= float(SPEC.get("pre_land_hold_sec", 2.0) or 2.0):
+            if now - phase_started > float(SPEC.get("max_pre_land_stabilization_sec", 8.0) or 8.0):
+                fail_landing("pre_land_stabilization_timeout")
+                return
+            stable = (
+                health.get("xy_speed_mps") is not None
+                and health.get("tilt_deg") is not None
+                and health["xy_speed_mps"] <= float(SPEC.get("max_pre_land_xy_speed_mps", 0.20) or 0.20)
+                and health["tilt_deg"] <= float(SPEC.get("max_pre_land_tilt_deg", 8.0) or 8.0)
+            )
+            if not stable:
+                state["pre_land_stable_since_monotonic"] = None
+                return
+            if state.get("pre_land_stable_since_monotonic") is None:
+                state["pre_land_stable_since_monotonic"] = now
+            stable_since = float(state.get("pre_land_stable_since_monotonic") or now)
+            if now - stable_since >= float(SPEC.get("pre_land_hold_sec", 2.0) or 2.0):
                 state["landing_phase"] = "landing"
                 state["landing_phase_started_monotonic"] = now
             return
@@ -1081,7 +1203,8 @@ def main() -> int:
             if state.get("ready_since_monotonic") is None:
                 state["ready_since_monotonic"] = now_monotonic
             state["ready_elapsed_sec"] = max(0.0, now_monotonic - float(state.get("ready_since_monotonic") or now_monotonic))
-            publish_hold_cmd_vel()
+            if state.get("landing_phase", "idle") == "idle" and not exploration_intent_is_fresh(now_monotonic):
+                publish_hold_cmd_vel()
             if not SPEC.get("task_completion_status_topic") and state["ready_elapsed_sec"] >= float(SPEC.get("hold_after_ready_sec", 0.0) or 0.0):
                 state["task_completed"] = True
         else:
@@ -1218,8 +1341,11 @@ def controller_status(state: dict) -> dict:
         "setpoint_intent_samples": state.get("setpoint_intent_count", 0),
         "cmd_vel_publish_count": state.get("cmd_vel_publish_count", 0),
         "mavlink_setpoint_count": state.get("mavlink_setpoint_count", 0),
+        "mavlink_setpoint_source_counts": state.get("mavlink_setpoint_source_counts", {}),
         "mavlink_setpoint_error": state.get("mavlink_setpoint_error", ""),
         "mavlink_local_position_count": state.get("mavlink_local_position_count", 0),
+        "crash_detected": bool(state.get("crash_detected", False)),
+        "mavlink_crash_statustext": state.get("mavlink_crash_statustext", []),
         "home_pose_ned": state.get("home_pose_ned"),
         "landing_phase": phase,
         "bootstrap": bootstrap,
@@ -1279,6 +1405,7 @@ def setpoint_output(state: dict) -> dict:
         "setpoint_intent_samples": state.get("setpoint_intent_count", 0),
         "cmd_vel_publish_count": state.get("cmd_vel_publish_count", 0),
         "mavlink_setpoint_count": state.get("mavlink_setpoint_count", 0),
+        "mavlink_setpoint_source_counts": state.get("mavlink_setpoint_source_counts", {}),
         "mavlink_setpoint_error": state.get("mavlink_setpoint_error", ""),
         "mavlink_local_position_count": state.get("mavlink_local_position_count", 0),
         "min_accepted_goals": SPEC.get("min_accepted_goals", 0),
@@ -1326,7 +1453,8 @@ def landing_status(state: dict) -> dict:
     policy = SPEC.get("landing_policy") or "land_in_place"
     task_completed = bool(state.get("task_completed", False))
     phase = state.get("landing_phase", "idle")
-    ready = phase == "complete"
+    crash_detected = bool(state.get("crash_detected", False))
+    ready = phase == "complete" and not crash_detected
     required_return = policy == "return_home_then_land"
     return_complete = state.get("return_home_completed_monotonic") is not None
     return_started = state.get("return_home_started_monotonic")
@@ -1337,7 +1465,10 @@ def landing_status(state: dict) -> dict:
     landing_started = state.get("landing_started_monotonic")
     landing_duration = None if landing_started is None else round(max(0.0, time.monotonic() - float(landing_started)), 3)
     disarmed = state.get("mavlink_armed") is False
+    physical_health = landing_physical_health(state)
     blockers = []
+    if crash_detected:
+        blockers.append("crash_detected")
     if phase == "idle":
         blockers.append("task_completion_required_before_landing")
     elif phase == "failed":
@@ -1363,6 +1494,8 @@ def landing_status(state: dict) -> dict:
         "task_completed": task_completed,
         "task_terminal": bool(state.get("task_terminal", False)),
         "task_failure_blockers": state.get("task_failure_blockers", []),
+        "crash_detected": crash_detected,
+        "mavlink_crash_statustext": state.get("mavlink_crash_statustext", []),
         "return_home": {
             "required": required_return,
             "ok": return_complete if required_return else True,
@@ -1371,6 +1504,17 @@ def landing_status(state: dict) -> dict:
             "duration_sec": return_duration,
             "home_source": SPEC.get("home_source", "post_takeoff_hover_pose"),
             "home_radius_m": SPEC.get("home_radius_m", 0.35),
+        },
+        "landing_anchor_ned": state.get("landing_anchor_ned"),
+        "landing_hold_ned": state.get("landing_hold_ned"),
+        "return_setpoint_ned": state.get("return_setpoint_ned"),
+        "physical_health": {
+            "tilt_deg": physical_health.get("tilt_deg"),
+            "xy_speed_mps": physical_health.get("xy_speed_mps"),
+            "altitude_disagreement_m": physical_health.get("altitude_disagreement_m"),
+            "max_tilt_deg": state.get("max_landing_tilt_deg", 0.0),
+            "max_xy_speed_mps": state.get("max_landing_xy_speed_mps", 0.0),
+            "max_altitude_disagreement_m": state.get("max_landing_altitude_disagreement_m", 0.0),
         },
         "land_command_sent": bool(state.get("land_command_sent", False)),
         "land_command_accepted": bool(state.get("land_command_accepted", False)),

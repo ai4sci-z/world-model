@@ -8,6 +8,19 @@
 - FCU 状态机、唯一 setpoint owner 和真实悬停
 - MCAP rosbag 和 Foxglove 回放验收
 
+## GBPlanner ROS2 集成当前状态（2026-08-25）
+
+GBPlanner ROS2 原生迁移由相邻仓库 `/home/ai4s/projects/gbp-feat` 维护。
+WorldModel 在 `task=exploration` 且 `strategy=external` 时通过 `orchestration/sim`
+的 RuntimeSpec 正式管理 `gbplanner_stack`，不再依赖 M5 wrapper 自行启动旁路容器。
+固定候选 `GBPlanner c425172` + `WorldModel 696e07b` 已完成两轮 external 闭环验收，
+包含 3 个航点、真实 3D 轨迹、返航、LAND、touchdown、disarm 和 motors-safe；这仍不足
+以关闭长程 cohort，也不等于 ROS1/ROS2 完整算法无损等价。下一道工程门是两仓形成
+干净提交后，重建带 OCI revision 的正式镜像并重复固定 SHA cohort。
+
+详细样本、失败分母与未关闭硬门见 GBPlanner 仓库的
+`docs/M5c_cohort_2026-08-24.md`。
+
 ## 主导航
 
 ### 室内无 GPS 主线

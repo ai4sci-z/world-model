@@ -76,6 +76,21 @@ func BuildRuntimeSpecs(project config.ProjectConfig, plan helpers.ExecutionPlan,
 			bundle.Services = append(bundle.Services, overlaySpec)
 		}
 	}
+	if hasTaskRuntimeConfig && plan.TaskID == "exploration" && taskRuntimeConfig.ExplorationGate.Strategy == "external" {
+		spec, err := gbplannerStackServiceSpec(
+			project,
+			taskRuntimeConfig.ExplorationGate,
+			absoluteWorkspaceRoot,
+			artifactDir,
+		)
+		if err != nil {
+			return RuntimeSpecBundle{}, err
+		}
+		if err := spec.ValidateDocker(); err != nil {
+			return RuntimeSpecBundle{}, err
+		}
+		bundle.Services = append(bundle.Services, spec)
+	}
 
 	for _, service := range plan.RuntimeServices {
 		image, err := resolveImageRef(project, service.ImageRef)
@@ -235,6 +250,81 @@ func startupReadinessRestartableService(name string) bool {
 	default:
 		return false
 	}
+}
+
+func gbplannerStackServiceSpec(
+	project config.ProjectConfig,
+	exploration config.ExplorationGateConfig,
+	absoluteWorkspaceRoot string,
+	artifactDir string,
+) (simruntime.ServiceSpec, error) {
+	runtimeRoot := strings.TrimSpace(os.Getenv("NAVLAB_GBPLANNER_ROOT"))
+	if runtimeRoot == "" {
+		runtimeRoot = strings.TrimSpace(exploration.ExternalRuntimeRoot)
+	}
+	if runtimeRoot == "" {
+		return simruntime.ServiceSpec{}, fmt.Errorf("external exploration requires exploration_gate.external_runtime_root")
+	}
+	if !filepath.IsAbs(runtimeRoot) {
+		runtimeRoot = filepath.Join(absoluteWorkspaceRoot, runtimeRoot)
+	}
+	runtimeRoot, err := filepath.Abs(runtimeRoot)
+	if err != nil {
+		return simruntime.ServiceSpec{}, err
+	}
+
+	mounts := []struct {
+		relative string
+		target   string
+	}{
+		{relative: "ros2_port/wm_mapping", target: "/wm"},
+		{relative: "ros2_port/src/gbplanner_node/config", target: "/gbcfg"},
+		{relative: "ros2_port/adapter", target: "/adapter"},
+	}
+	volumes := make([]simruntime.VolumeMount, 0, len(mounts)+1)
+	for _, mount := range mounts {
+		source := filepath.Join(runtimeRoot, filepath.FromSlash(mount.relative))
+		if info, statErr := os.Stat(source); statErr != nil || !info.IsDir() {
+			if statErr == nil {
+				statErr = fmt.Errorf("not a directory")
+			}
+			return simruntime.ServiceSpec{}, fmt.Errorf("GBPlanner runtime input %s: %w", source, statErr)
+		}
+		volumes = append(volumes, simruntime.VolumeMount{Source: source, Target: mount.target, Mode: "ro"})
+	}
+	stackScript := filepath.Join(runtimeRoot, "ros2_port", "wm_mapping", "gbp_stack.sh")
+	if info, statErr := os.Stat(stackScript); statErr != nil || info.IsDir() {
+		if statErr == nil {
+			statErr = fmt.Errorf("not a regular file")
+		}
+		return simruntime.ServiceSpec{}, fmt.Errorf("GBPlanner stack entrypoint %s: %w", stackScript, statErr)
+	}
+
+	absoluteArtifactDir, err := filepath.Abs(artifactDir)
+	if err != nil {
+		return simruntime.ServiceSpec{}, err
+	}
+	volumes = append(volumes, simruntime.VolumeMount{Source: absoluteArtifactDir, Target: "/out", Mode: "rw"})
+	image, err := resolveImageRef(project, exploration.ExternalRuntimeImageRef)
+	if err != nil {
+		return simruntime.ServiceSpec{}, fmt.Errorf("GBPlanner runtime image: %w", err)
+	}
+	return simruntime.ServiceSpec{
+		Name:           "gbplanner_stack",
+		Image:          image,
+		ContainerName:  "navlab-gbplanner-stack",
+		Command:        []string{"bash", "/wm/gbp_stack.sh"},
+		Env:            baselineEnv(project),
+		CWD:            "/ws",
+		Volumes:        volumes,
+		Networks:       []string{"host"},
+		Detach:         true,
+		Required:       true,
+		LogPath:        artifactlayout.RuntimeLog(artifactDir, "gbplanner_stack.start.log"),
+		ServiceRole:    "gbplanner",
+		StopSignal:     "SIGTERM",
+		StopTimeoutSec: 5,
+	}, nil
 }
 
 func startupReadinessProbeSpec(
@@ -530,11 +620,15 @@ func mavlinkExternalNavSenderServiceSpec(
 		"--rate-hz 20",
 		"--quality 100",
 		"--source-system 191",
-		"--use-fcu-roll-pitch",
+		"--roll-pitch-source fcu",
 		"--no-align-yaw-to-fcu",
+		"--no-use-fcu-yaw",
 		"--local-position-pose-topic /navlab/fcu/local_position_pose",
 		"--max-local-position-age-ms 1000",
-		"--max-horizontal-speed-mps 0.25",
+		// ExternalNav is already jump/quality-gated by the ROS bridge. Slewing a
+		// validated measurement fabricates estimator lag whenever the vehicle
+		// exceeds the cap, so production simulation must forward XY losslessly.
+		"--max-horizontal-speed-mps 0",
 		"--max-yaw-rate-radps 0.6",
 		"> " + shellQuote(containerArtifactDir+"/"+artifactlayout.RuntimeLogRel("mavlink_external_nav.runtime.log")) + " 2>&1",
 	}, " ")

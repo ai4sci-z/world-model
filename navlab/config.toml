@@ -113,9 +113,11 @@ rate_hz = 20.0
 quality = 100
 reset_counter = 0
 source_system = 191
-use_fcu_roll_pitch = true
+roll_pitch_source = "fcu"
+align_yaw_to_fcu = false
+use_fcu_yaw = false
 local_position_pose_topic = "/navlab/fcu/local_position_pose"
-max_horizontal_speed_mps = 0.25
+max_horizontal_speed_mps = 0.0
 max_yaw_rate_radps = 0.6
 
 [companion.runtime.mission]
