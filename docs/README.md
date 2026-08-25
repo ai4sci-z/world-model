@@ -13,10 +13,12 @@
 GBPlanner ROS2 原生迁移由相邻仓库 `/home/ai4s/projects/gbp-feat` 维护。
 WorldModel 在 `task=exploration` 且 `strategy=external` 时通过 `orchestration/sim`
 的 RuntimeSpec 正式管理 `gbplanner_stack`，不再依赖 M5 wrapper 自行启动旁路容器。
-固定候选 `GBPlanner c425172` + `WorldModel 696e07b` 已完成两轮 external 闭环验收，
-包含 3 个航点、真实 3D 轨迹、返航、LAND、touchdown、disarm 和 motors-safe；这仍不足
-以关闭长程 cohort，也不等于 ROS1/ROS2 完整算法无损等价。下一道工程门是两仓形成
-干净提交后，重建带 OCI revision 的正式镜像并重复固定 SHA cohort。
+固定候选 `GBPlanner 172be55` + `WorldModel 80e4a31` 已完成 3/3 clean-SHA
+external 闭环验收，包含 3 个航点、真实 3D 轨迹、返航、LAND、touchdown、disarm 和
+motors-safe；同一 WorldModel SHA 的 `frontier_lite` 基础对照也取得 2/2 PASS。该小样本
+证明正式 RuntimeSpec 管理路径可重复工作，但仍不足以关闭长程 cohort，也不等于
+ROS1/ROS2 完整算法无损等价。下一道门是扩展时长/方向/高度与故障安全样本，并完成
+ROS1-vs-ROS2 的 gain、collision、frontier、RRG 和 best-trajectory 对拍。
 
 详细样本、失败分母与未关闭硬门见 GBPlanner 仓库的
 `docs/M5c_cohort_2026-08-24.md`。
