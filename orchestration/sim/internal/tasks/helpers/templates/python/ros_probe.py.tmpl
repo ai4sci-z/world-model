@@ -375,13 +375,10 @@ def sample_string_topics(topics: list[str]) -> dict:
     return samples
 
 def string_holder_ok(topic: str, holder: dict) -> bool:
-    if topic == SLAM_STATUS_TOPIC:
-        return holder.get("best_data") is not None
-    if holder.get("best_data") is not None:
-        return True
     data = holder.get("data")
-    parsed = holder.get("parsed")
-    return data is not None and string_payload_ok(parsed)
+    # The holder records transport receipt.  A terminal status may carry
+    # `ok=false`; that is business evidence for the gate, not a missing sample.
+    return data is not None
 
 def string_holder_ready(topic: str, holder: dict) -> bool:
     """A terminal task sample ends waiting but remains an unsuccessful sample."""

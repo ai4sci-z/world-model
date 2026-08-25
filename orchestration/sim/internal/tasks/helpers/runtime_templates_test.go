@@ -165,6 +165,7 @@ func TestRuntimeScriptTemplatesRenderMissionAndNavigationWrappers(t *testing.T) 
 				`"failure_kind": "topic_type_missing"`,
 				`sample["failure_kind"] = "topic_sample_missing"`,
 				"if sample.get(\"ok\", False):",
+				"return data is not None",
 			},
 		},
 		{
