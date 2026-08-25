@@ -166,6 +166,9 @@ func TestRuntimeScriptTemplatesRenderMissionAndNavigationWrappers(t *testing.T) 
 				`sample["failure_kind"] = "topic_sample_missing"`,
 				"if sample.get(\"ok\", False):",
 				"return data is not None",
+				`if topic == SLAM_STATUS_TOPIC:`,
+				`return holder.get("best_data") is not None`,
+				`return isinstance(parsed, dict) and parsed.get("terminal") is True`,
 			},
 		},
 		{

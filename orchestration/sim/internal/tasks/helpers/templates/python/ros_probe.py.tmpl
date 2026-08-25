@@ -381,8 +381,10 @@ def string_holder_ok(topic: str, holder: dict) -> bool:
     return data is not None
 
 def string_holder_ready(topic: str, holder: dict) -> bool:
-    """A terminal task sample ends waiting but remains an unsuccessful sample."""
-    if string_holder_ok(topic, holder):
+    """Wait for a useful/terminal payload, not the first transport sample."""
+    if topic == SLAM_STATUS_TOPIC:
+        return holder.get("best_data") is not None
+    if holder.get("best_data") is not None:
         return True
     parsed = holder.get("parsed")
     return isinstance(parsed, dict) and parsed.get("terminal") is True
